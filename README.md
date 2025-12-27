@@ -6,23 +6,45 @@ A Go library, CLI tool, and stdio MCP server for processing Interactsh OAST (Out
 
 `roast` decodes metadata embedded in Interactsh OAST domain names. These domains encode a 12-byte XID preamble containing timestamp, machine ID, process ID, and counter values that can be used for threat intelligence correlation and campaign tracking.
 
+## Homage
+
+Built this thanks to John Jarocki's epic LabsCon presentation "["Tracking the cyberspace ghost from OAST to OAST"](https://drive.proton.me/urls/ACAEQN0HB4#wfhmFCMfc4Os)".
+
 ## Installation
 
 ```bash
-go install github.com/hrbrmstr/go-roast/cmd/roast@latest
+go install codeberg.org/hrbrmstr/go-roast/cmd/roast@latest
 ```
 
 Or build from source:
 
 ```bash
-git clone https://github.com/hrbrmstr/go-roast
+git clone https://codeberg.org/hrbrmstr/go-roast
 cd go-roast
 go build -o roast ./cmd/roast
 ```
 
 ## CLI Usage
 
+### Quick Reference
+
+| Command | Purpose |
+|---------|---------|
+| `roast decode` | Decode OAST domains (one per line) |
+| `roast extract` | Extract OAST domains from text/logs |
+| `roast analyze` | Analyze domains for campaign patterns |
+| `roast mcp` | Start MCP stdio server |
+
+### Global Flags
+
+- `-o, --output` - Output format: json, csv, table, markdown (default: json)
+- `-q, --quiet` - Suppress non-essential output
+- `-h, --help` - Show help for any command
+- `-v, --version` - Show version information
+
 ### Decode OAST domains
+
+Decode one or more OAST domains from a file or stdin.
 
 ```bash
 # Decode from stdin
@@ -36,9 +58,17 @@ roast decode -f domains.txt -o csv
 
 # Output as table
 roast decode -f domains.txt -o table
+
+# Quiet mode (suppress counts)
+roast decode -f domains.txt -q
 ```
 
+**Flags:**
+- `-f, --file` - File containing OAST domains (one per line)
+
 ### Extract OAST domains from text
+
+Extract OAST domains from text files or stdin.
 
 ```bash
 # Extract from file
@@ -49,10 +79,50 @@ roast extract -f logfile.txt --decode
 
 # Extract from stdin
 cat logs.txt | roast extract --decode -o json
+
+# Extract with CSV output
+roast extract -f logfile.txt -o csv
+
+# Extract and decode with table output
+roast extract -f logfile.txt --decode -o table
 ```
+
+**Flags:**
+- `-f, --file` - File to extract OAST domains from (if not provided, reads from stdin)
+- `--decode` - Also decode extracted domains
+
+### Analyze OAST campaigns
+
+Analyze OAST domains from a file or stdin and generate campaign statistics. Automatically extracts and decodes all domains found.
+
+```bash
+# Analyze domains from a file (markdown report)
+roast analyze -f domains.txt -o markdown
+
+# Analyze from stdin
+cat logs.txt | roast analyze -o markdown
+
+# Output as JSON
+roast analyze -f domains.txt -o json
+
+# Include raw JSON data with markdown report
+roast analyze -f domains.txt -o markdown --include-json
+```
+
+**Flags:**
+- `-f, --file` - File to analyze (if not provided, reads from stdin)
+- `--include-json` - Include raw JSON data in markdown output
+
+**Campaign analysis provides:**
+- Overall statistics (total domains, valid/invalid, unique campaigns/machines/PIDs)
+- Time span of activity (first seen, last seen, duration)
+- Per-campaign breakdown with counts, timestamps, machine IDs, PIDs, and K-sort values
+- Correlation data for threat intelligence
+- Counter ranges to identify campaign progression
 
 ### Example Output
 
+**Decode output (JSON):**
 ```json
 [
   {
@@ -69,6 +139,30 @@ cat logs.txt | roast extract --decode -o json
 ]
 ```
 
+**Campaign analysis output (Markdown):**
+```markdown
+# OAST Campaign Analysis
+
+## Overall Statistics
+- **Total Domains Found:** 15
+- **Valid Domains:** 15
+- **Unique Campaigns:** 3
+- **Unique Machine IDs:** 2
+- **Unique PIDs:** 1
+- **First Seen:** 2024-01-15T10:30:45Z
+- **Last Seen:** 2024-01-17T14:22:33Z
+- **Time Span:** 2.2 days
+
+## Campaign Details
+
+### Campaign: `he008`
+- **Count:** 8 domains
+- **Duration:** 4.5 hours
+- **Counter Range:** 5678 - 5801
+- **Machine IDs (1):** `12:34:56`
+- **PIDs (1):** `1234`
+```
+
 ## MCP Server
 
 Start the Model Context Protocol stdio server:
@@ -76,6 +170,12 @@ Start the Model Context Protocol stdio server:
 ```bash
 roast mcp
 ```
+
+📖 **For detailed Claude Desktop configuration, see [CLAUDE_DESKTOP.md](CLAUDE_DESKTOP.md)**
+
+### Prompts
+
+- `oast-expert` - Comprehensive OAST domain knowledge base and analysis guidance (load with `/oast-expert` in Claude Desktop)
 
 ### Resources
 
@@ -89,10 +189,13 @@ roast mcp
 - `extract_oast` - Extract OAST domains from text
 - `extract_oast_file` - Extract OAST domains from a file
 - `validate_oast` - Check if a string is a valid OAST domain
+- `oast_campaign_analysis` - Analyze OAST domains from a file and generate a campaign analysis summary in markdown format
 
 ### MCP Configuration
 
-Add to your Claude Desktop config:
+#### Basic Configuration
+
+Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
 
 ```json
 {
@@ -105,10 +208,87 @@ Add to your Claude Desktop config:
 }
 ```
 
+Replace `/path/to/roast` with the full path to your roast binary.
+
+#### Using the OAST Expert Prompt
+
+Claude Desktop supports MCP prompts. To automatically provide OAST domain expertise context:
+
+1. After adding the MCP server configuration above, restart Claude Desktop
+2. Start a conversation and type `/oast-expert` to load the comprehensive OAST knowledge base
+3. Claude will have access to detailed information about:
+   - OAST domain structure and encoding
+   - Decoding algorithms and field layouts
+   - Campaign analysis techniques
+   - Machine ID derivation
+   - Version detection patterns
+   - Analysis best practices
+
+The prompt provides context for intelligent analysis of OAST domains without needing to read resources manually.
+
+**What's included in the prompt:**
+- Complete OAST domain structure documentation
+- Base32hex and z-base-32 encoding specifications
+- Field layout with byte-level details
+- Machine ID derivation for all platforms
+- K-sort and campaign identifier explanations
+- Version detection techniques (v1.0.1 detection via 'y' patterns)
+- Threat intelligence correlation strategies
+- Campaign tracking methodologies
+- Analysis tips and best practices
+- All known OAST domain suffixes
+
+This rich context allows Claude to provide expert-level analysis and guidance when working with OAST domains.
+
 ## Library Usage
 
+### Core Types
+
 ```go
-import "github.com/hrbrmstr/go-roast/pkg/roast"
+// DecodedOAST contains the decoded metadata from an OAST domain
+type DecodedOAST struct {
+    Original  string    // Original subdomain/FQDN
+    Timestamp time.Time // Decoded timestamp
+    MachineID string    // Format: "xx:xx:xx" (3 hex bytes)
+    PID       uint16    // Process ID
+    Counter   uint32    // Counter value (24-bit)
+    Nonce     string    // The nonce portion (if present)
+    KSort     string    // First 6 chars of preamble (for K-sorting)
+    Campaign  string    // Chars 7-11 of preamble (campaign identifier)
+    Valid     bool      // Whether decoding succeeded
+    Error     string    // Error message if invalid
+}
+
+// OASTMatch represents an extracted OAST domain from text
+type OASTMatch struct {
+    Full       string // Full matched string
+    Subdomain  string // Just the subdomain portion
+    Domain     string // The OAST domain (e.g., "oast.fun")
+    StartIndex int    // Position in source text
+    EndIndex   int    // End position in source text
+}
+
+// CampaignAnalysis contains the full analysis of OAST domains
+type CampaignAnalysis struct {
+    TotalDomains    int
+    ValidDomains    int
+    InvalidDomains  int
+    UniqueCampaigns int
+    FirstSeen       time.Time
+    LastSeen        time.Time
+    TimeSpan        string
+    UniqueMachines  int
+    UniquePIDs      int
+    MachineIDs      []string
+    PIDs            []uint16
+    Campaigns       map[string]*CampaignStats
+}
+```
+
+### Decoding Functions
+
+```go
+import "codeberg.org/hrbrmstr/go-roast/pkg/roast"
 
 // Decode a single domain
 decoded, err := roast.Decode("c58bduhe008dovpvhvugcfemp9yyyyyyn.oast.pro")
@@ -120,16 +300,88 @@ fmt.Printf("Timestamp: %s\n", decoded.Timestamp)
 fmt.Printf("Machine ID: %s\n", decoded.MachineID)
 fmt.Printf("PID: %d\n", decoded.PID)
 fmt.Printf("Counter: %d\n", decoded.Counter)
+fmt.Printf("Campaign: %s\n", decoded.Campaign)
 
-// Extract domains from text
+// Decode multiple domains at once
+domains := []string{"domain1.oast.pro", "domain2.oast.fun"}
+results := roast.DecodeBatch(domains)
+for _, result := range results {
+    if result.Valid {
+        fmt.Printf("%s: %s\n", result.Campaign, result.Timestamp)
+    }
+}
+```
+
+### Extraction Functions
+
+```go
+// Extract domains from a string
 matches := roast.ExtractFromString("Found: c58bduhe008dovpvhvug.oast.pro")
 for _, match := range matches {
     fmt.Printf("Found: %s at position %d\n", match.Full, match.StartIndex)
 }
 
-// Extract and decode
+// Extract from a reader (e.g., file, HTTP response)
+file, _ := os.Open("logs.txt")
+matches, err := roast.ExtractFromReader(file)
+
+// Extract from a file
+matches, err := roast.ExtractFromFile("logs.txt")
+
+// Extract and decode in one step
 text := "Logs contain c58bduhe008dovpvhvug.oast.pro"
 matches, decoded := roast.ExtractAndDecode(text)
+
+// Extract and decode from a reader
+matches, decoded, err := roast.ExtractAndDecodeFromReader(file)
+
+// Extract and decode from a file
+matches, decoded, err := roast.ExtractAndDecodeFromFile("logs.txt")
+```
+
+### Campaign Analysis Functions
+
+```go
+// Analyze domains from a file
+analysis, err := roast.AnalyzeCampaignFromFile("domains.txt")
+if err != nil {
+    log.Fatal(err)
+}
+
+fmt.Printf("Total domains: %d\n", analysis.TotalDomains)
+fmt.Printf("Unique campaigns: %d\n", analysis.UniqueCampaigns)
+fmt.Printf("Time span: %s\n", analysis.TimeSpan)
+
+// Generate markdown report
+markdown := analysis.FormatMarkdown()
+fmt.Println(markdown)
+
+// Analyze domains from a string
+text := "log with c58bduhe008dovpvhvug.oast.pro domains"
+analysis := roast.AnalyzeCampaignFromString(text)
+```
+
+### Validation Functions
+
+```go
+// Check if a string is a valid OAST subdomain
+if roast.IsValidOASTSubdomain("c58bduhe008dovpvhvugcfemp9yyyyyyn") {
+    fmt.Println("Valid subdomain")
+}
+
+// Validate that a 20-char string is valid base32hex
+if roast.IsValidPreamble("c58bduhe008dovpvhvug") {
+    fmt.Println("Valid preamble")
+}
+
+// Get list of known OAST domain suffixes
+domains := roast.KnownOASTDomains()
+// Returns: ["oast.pro", "oast.live", "oast.site", ...]
+
+// Check if a domain is a known OAST domain
+if roast.IsKnownOASTDomain("oast.pro") {
+    fmt.Println("Known OAST domain")
+}
 ```
 
 ## OAST Domain Format

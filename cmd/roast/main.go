@@ -8,8 +8,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/hrbrmstr/go-roast/mcp"
-	"github.com/hrbrmstr/go-roast/pkg/roast"
+	"codeberg.org/hrbrmstr/go-roast/mcp"
+	"codeberg.org/hrbrmstr/go-roast/pkg/roast"
 	"github.com/spf13/cobra"
 )
 
@@ -32,6 +32,7 @@ func main() {
 
 	rootCmd.AddCommand(decodeCmd())
 	rootCmd.AddCommand(extractCmd())
+	rootCmd.AddCommand(analyzeCmd())
 	rootCmd.AddCommand(mcpCmd())
 
 	if err := rootCmd.Execute(); err != nil {
@@ -139,6 +140,42 @@ func extractCmd() *cobra.Command {
 
 	cmd.Flags().StringVarP(&fileFlag, "file", "f", "", "File to extract OAST domains from")
 	cmd.Flags().BoolVar(&decodeFlag, "decode", false, "Also decode extracted domains")
+
+	return cmd
+}
+
+func analyzeCmd() *cobra.Command {
+	var fileFlag string
+	var includeJSON bool
+
+	cmd := &cobra.Command{
+		Use:   "analyze",
+		Short: "Analyze OAST domains for campaign patterns",
+		Long:  "Analyze OAST domains from a file or stdin and generate campaign statistics.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var analysis *roast.CampaignAnalysis
+			var err error
+
+			if fileFlag != "" {
+				analysis, err = roast.AnalyzeCampaignFromFile(fileFlag)
+			} else {
+				content, err := readFromStdin()
+				if err != nil {
+					return fmt.Errorf("failed to read stdin: %w", err)
+				}
+				analysis = roast.AnalyzeCampaignFromString(content)
+			}
+
+			if err != nil {
+				return fmt.Errorf("analysis failed: %w", err)
+			}
+
+			return outputAnalysis(analysis, outputFlag, includeJSON)
+		},
+	}
+
+	cmd.Flags().StringVarP(&fileFlag, "file", "f", "", "File to analyze (if not provided, reads from stdin)")
+	cmd.Flags().BoolVar(&includeJSON, "include-json", false, "Include raw JSON data in markdown output")
 
 	return cmd
 }
@@ -282,4 +319,49 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return s[:max-3] + "..."
+}
+
+func readFromStdin() (string, error) {
+	var sb strings.Builder
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		sb.WriteString(scanner.Text())
+		sb.WriteString("\n")
+	}
+	if err := scanner.Err(); err != nil {
+		return "", err
+	}
+	return sb.String(), nil
+}
+
+func outputAnalysis(analysis *roast.CampaignAnalysis, format string, includeJSON bool) error {
+	switch strings.ToLower(format) {
+	case "json":
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(analysis)
+	case "markdown", "md":
+		markdown := analysis.FormatMarkdown()
+		if includeJSON {
+			data, err := json.MarshalIndent(analysis, "", "  ")
+			if err != nil {
+				return fmt.Errorf("failed to encode JSON: %w", err)
+			}
+			markdown += "\n## Raw JSON Data\n\n```json\n" + string(data) + "\n```\n"
+		}
+		fmt.Print(markdown)
+		return nil
+	default:
+		// Default to markdown for campaign analysis
+		markdown := analysis.FormatMarkdown()
+		if includeJSON {
+			data, err := json.MarshalIndent(analysis, "", "  ")
+			if err != nil {
+				return fmt.Errorf("failed to encode JSON: %w", err)
+			}
+			markdown += "\n## Raw JSON Data\n\n```json\n" + string(data) + "\n```\n"
+		}
+		fmt.Print(markdown)
+		return nil
+	}
 }

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/hrbrmstr/go-roast/pkg/roast"
+	"codeberg.org/hrbrmstr/go-roast/pkg/roast"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -188,4 +188,45 @@ func handleValidateOAST(args map[string]interface{}) (*mcp.CallToolResult, error
 	}
 
 	return mcp.NewToolResultText(string(data)), nil
+}
+
+func campaignAnalysisTool() mcp.Tool {
+	return mcp.NewTool("oast_campaign_analysis",
+		mcp.WithDescription("Analyze OAST domains from a file and generate a campaign analysis summary in markdown format"),
+		mcp.WithString("path",
+			mcp.Required(),
+			mcp.Description("Path to file containing OAST domains"),
+		),
+		mcp.WithBoolean("include_json",
+			mcp.Description("Also include JSON data (default: false)"),
+		),
+	)
+}
+
+func handleCampaignAnalysis(args map[string]interface{}) (*mcp.CallToolResult, error) {
+	path, ok := args["path"].(string)
+	if !ok {
+		return mcp.NewToolResultError("path must be a string"), nil
+	}
+
+	includeJSON, _ := args["include_json"].(bool)
+
+	analysis, err := roast.AnalyzeCampaignFromFile(path)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to analyze campaigns: %v", err)), nil
+	}
+
+	// Generate markdown report
+	markdown := analysis.FormatMarkdown()
+
+	// If JSON requested, append it
+	if includeJSON {
+		data, err := json.MarshalIndent(analysis, "", "  ")
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to encode analysis: %v", err)), nil
+		}
+		markdown += "\n\n## Raw JSON Data\n\n```json\n" + string(data) + "\n```\n"
+	}
+
+	return mcp.NewToolResultText(markdown), nil
 }

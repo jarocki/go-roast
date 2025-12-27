@@ -3,7 +3,7 @@ package mcp
 import (
 	"fmt"
 
-	"github.com/hrbrmstr/go-roast/pkg/roast"
+	"codeberg.org/hrbrmstr/go-roast/pkg/roast"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -14,9 +14,17 @@ func Serve() error {
 		"roast",
 		"1.0.0",
 		server.WithResourceCapabilities(false, false),
+		server.WithPromptCapabilities(true),
 	)
 
-	// Register resources
+	// Register prompt
+	s.AddPrompt(
+		mcp.NewPrompt("oast-expert",
+			mcp.WithPromptDescription("Comprehensive OAST domain knowledge and analysis guidance")),
+		getOASTExpertPrompt,
+	)
+
+	// Register resources (kept for backward compatibility)
 	s.AddResource(
 		mcp.NewResource("oast://info", "Overview of OAST domains",
 			mcp.WithResourceDescription("OAST domain overview and structure"),
@@ -43,8 +51,24 @@ func Serve() error {
 	s.AddTool(extractOASTTool(), handleExtractOAST)
 	s.AddTool(extractOASTFileTool(), handleExtractOASTFile)
 	s.AddTool(validateOASTTool(), handleValidateOAST)
+	s.AddTool(campaignAnalysisTool(), handleCampaignAnalysis)
 
 	return server.ServeStdio(s)
+}
+
+func getOASTExpertPrompt(arguments map[string]string) (*mcp.GetPromptResult, error) {
+	return &mcp.GetPromptResult{
+		Description: "Comprehensive OAST domain knowledge and analysis guidance",
+		Messages: []mcp.PromptMessage{
+			{
+				Role: "user",
+				Content: mcp.TextContent{
+					Type: "text",
+					Text: GetInitializationPrompt(),
+				},
+			},
+		},
+	}, nil
 }
 
 func getInfoResource(request mcp.ReadResourceRequest) ([]interface{}, error) {

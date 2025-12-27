@@ -1,4 +1,4 @@
-module github.com/hrbrmstr/go-roast
+module codeberg.org/hrbrmstr/go-roast
 
 go 1.23.5
 
