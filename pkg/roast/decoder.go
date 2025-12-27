@@ -1,0 +1,135 @@
+package roast
+
+import (
+	"encoding/binary"
+	"fmt"
+	"strings"
+	"time"
+)
+
+// Decode decodes a single OAST subdomain (the part before the OAST domain)
+// Input can be just the subdomain or a full FQDN
+func Decode(input string) (*DecodedOAST, error) {
+	if input == "" {
+		result := &DecodedOAST{
+			Original: input,
+			Valid:    false,
+			Error:    "empty input",
+		}
+		return result, fmt.Errorf("empty input")
+	}
+
+	// Extract just the subdomain if a full FQDN was provided
+	subdomain := input
+	if idx := strings.Index(input, "."); idx > 0 {
+		subdomain = input[:idx]
+	}
+
+	subdomain = strings.ToLower(subdomain)
+
+	result := &DecodedOAST{
+		Original: input,
+		Valid:    false,
+	}
+
+	// Validate minimum length (20 chars for preamble)
+	if len(subdomain) < 20 {
+		result.Error = fmt.Sprintf("subdomain too short: %d chars (minimum 20)", len(subdomain))
+		return result, fmt.Errorf(result.Error)
+	}
+
+	// Extract preamble (first 20 chars)
+	preamble := subdomain[:20]
+
+	// Validate preamble contains only base32hex characters
+	if !IsValidPreamble(preamble) {
+		result.Error = "preamble contains invalid base32hex characters"
+		return result, fmt.Errorf(result.Error)
+	}
+
+	// Extract nonce if present
+	if len(subdomain) > 20 {
+		result.Nonce = subdomain[20:]
+	}
+
+	// Decode preamble
+	bytes, err := decodePreamble(preamble)
+	if err != nil {
+		result.Error = err.Error()
+		return result, err
+	}
+
+	// Extract fields from the 12-byte array
+	// Bytes 0-3: timestamp (big-endian uint32)
+	timestamp := binary.BigEndian.Uint32(bytes[0:4])
+	result.Timestamp = time.Unix(int64(timestamp), 0)
+
+	// Bytes 4-6: machine ID (3 bytes)
+	result.MachineID = fmt.Sprintf("%02x:%02x:%02x", bytes[4], bytes[5], bytes[6])
+
+	// Bytes 7-8: PID (big-endian uint16)
+	result.PID = binary.BigEndian.Uint16(bytes[7:9])
+
+	// Bytes 9-11: counter (24-bit big-endian value)
+	result.Counter = uint32(bytes[9])<<16 | uint32(bytes[10])<<8 | uint32(bytes[11])
+
+	// Extract K-sort and campaign identifiers
+	result.KSort = preamble[:6]
+	result.Campaign = preamble[6:11]
+
+	result.Valid = true
+	return result, nil
+}
+
+// DecodeBatch decodes multiple OAST domains
+func DecodeBatch(inputs []string) []*DecodedOAST {
+	results := make([]*DecodedOAST, len(inputs))
+	for i, input := range inputs {
+		result, _ := Decode(input)
+		results[i] = result
+	}
+	return results
+}
+
+// decodePreamble converts a 20-character base32hex string to 12 bytes
+// 20 chars × 5 bits = 100 bits, but we only use 96 bits (12 bytes)
+func decodePreamble(preamble string) ([12]byte, error) {
+	var bytes [12]byte
+	var bitBuffer uint64
+	var bitCount int
+	byteIndex := 0
+
+	for i := 0; i < len(preamble); i++ {
+		val, ok := base32hexValue(preamble[i])
+		if !ok {
+			return bytes, fmt.Errorf("invalid base32hex character: %c", preamble[i])
+		}
+
+		// Add 5 bits to buffer
+		bitBuffer = (bitBuffer << 5) | uint64(val)
+		bitCount += 5
+
+		// Extract complete bytes
+		for bitCount >= 8 && byteIndex < 12 {
+			bitCount -= 8
+			bytes[byteIndex] = byte((bitBuffer >> bitCount) & 0xFF)
+			byteIndex++
+		}
+	}
+
+	return bytes, nil
+}
+
+// base32hexValue converts a base32hex character to its 5-bit value
+func base32hexValue(c byte) (int, bool) {
+	if c >= '0' && c <= '9' {
+		return int(c - '0'), true
+	}
+	if c >= 'a' && c <= 'v' {
+		return int(c - 'a' + 10), true
+	}
+	if c >= 'A' && c <= 'V' {
+		return int(c - 'A' + 10), true
+	}
+	return 0, false
+}
