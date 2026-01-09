@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"fmt"
+	"time"
 
 	"codeberg.org/hrbrmstr/go-roast/pkg/roast"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -59,9 +60,22 @@ func Serve() error {
 	s.AddTool(extractOASTFileTool(), handleExtractOASTFile)
 	s.AddTool(validateOASTTool(), handleValidateOAST)
 	s.AddTool(campaignAnalysisTool(), handleCampaignAnalysis)
+
+	// Legacy tools (kept for backward compatibility)
 	s.AddTool(fetchInteractshDomainsTool(), handleFetchInteractshDomains)
 	s.AddTool(fetchBurpCollaboratorDomainsTool(), handleFetchBurpCollaboratorDomains)
 	s.AddTool(oastIntelTool(), handleOASTIntel)
+
+	// Enhanced tools with live fetching, caching, and validation
+	s.AddTool(fetchInteractshDomainsLiveTool(), handleFetchInteractshDomainsLive)
+	s.AddTool(fetchBurpCollaboratorDomainsLiveTool(), handleFetchBurpCollaboratorDomainsLive)
+	s.AddTool(checkDomainUpdatesTool(), handleCheckDomainUpdates)
+	s.AddTool(validateDomainAdvancedTool(), handleValidateDomainAdvanced)
+	s.AddTool(validateDomainBatchAdvancedTool(), handleValidateDomainBatchAdvanced)
+	s.AddTool(cacheStatsTool(), handleCacheStats)
+
+	// Start cache cleanup background task
+	StartCacheCleanup(15 * time.Minute)
 
 	return server.ServeStdio(s)
 }
