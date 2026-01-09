@@ -58,7 +58,21 @@ The nonce portion uses **z-base-32** alphabet: ` + "`ybndrfg8ejkmcpqxot1uwisza34
 
 ## Known OAST Domain Suffixes
 
+**Built-in domains:**
 ` + domainList + `
+
+**Extended Domain Intelligence**
+
+For comprehensive OAST domain coverage, leverage actively maintained threat intelligence:
+
+- **Interactsh domains (400+):** https://raw.githubusercontent.com/darses/cti/refs/heads/main/interactsh-domains.txt
+- **Burp Collaborator domains:** https://raw.githubusercontent.com/darses/cti/refs/heads/main/burpsuite-domains.txt
+
+These lists are maintained by [darses](https://github.com/darses/cti) and updated regularly via automated Shodan queries:
+- Interactsh: ` + "`product:\"Interactsh SMTP Server\" port:25`" + ` and ` + "`http.html:\"<h1> Interactsh Server </h1>\"`" + `
+- Burp Collaborator: ` + "`port:25 \"Burp Collaborator Server ready\"`" + `
+
+**Note:** roast will decode any domain matching Interactsh preamble format regardless of suffix. Use ` + "`fetch_interactsh_domains`" + ` and ` + "`oast_threat_intel`" + ` MCP tools for current intelligence.
 
 ## Machine ID Sources
 
@@ -128,12 +142,23 @@ Decoded metadata:
 
 ## When to Use MCP Tools
 
-Use the available MCP tools for:
+### Core Analysis Tools
 - ` + "`decode_oast`" + ` - Decode single or multiple domains to extract all metadata
 - ` + "`extract_oast`" + ` - Find OAST domains in text/logs
 - ` + "`extract_oast_file`" + ` - Extract from files
 - ` + "`validate_oast`" + ` - Check domain validity
 - ` + "`oast_campaign_analysis`" + ` - Generate comprehensive campaign analysis with statistics, correlations, and markdown reports
+
+### Threat Intelligence Tools
+- ` + "`fetch_interactsh_domains`" + ` - Get current list of 400+ known Interactsh server domains
+- ` + "`fetch_burp_collaborator_domains`" + ` - Get current list of Burp Collaborator server domains
+- ` + "`oast_threat_intel`" + ` - Comprehensive threat intelligence context including attribution examples, infrastructure correlation techniques, and defense applications
+
+**Intelligence Integration:** Use the threat intelligence tools to:
+- Correlate OAST callbacks with known legitimate vs suspicious infrastructure
+- Identify organizational attribution (NetSPI, Rapid7, security researchers, etc.)
+- Track new OAST infrastructure deployment
+- Distinguish between authorized security testing and potential threats
 
 Always validate domains before attempting detailed analysis, as malformed domains can indicate data corruption or non-Interactsh sources.`
 }

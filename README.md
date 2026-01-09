@@ -182,14 +182,21 @@ roast mcp
 - `oast://info` - Overview of OAST domains and their structure
 - `oast://format` - Detailed format specification including encoding details
 - `oast://domains` - List of known OAST domain suffixes
+- `oast://intel` - External OAST domain intelligence from actively maintained threat intelligence sources
 
 ### Tools
 
+#### Core Analysis Tools
 - `decode_oast` - Decode one or more OAST domains
 - `extract_oast` - Extract OAST domains from text
 - `extract_oast_file` - Extract OAST domains from a file
 - `validate_oast` - Check if a string is a valid OAST domain
 - `oast_campaign_analysis` - Analyze OAST domains from a file and generate a campaign analysis summary in markdown format
+
+#### Threat Intelligence Tools
+- `fetch_interactsh_domains` - Fetch the latest list of Interactsh domains from darses/cti repository
+- `fetch_burp_collaborator_domains` - Fetch the latest list of Burp Collaborator domains from darses/cti repository  
+- `oast_threat_intel` - Get comprehensive threat intelligence context about OAST domains and infrastructure
 
 ### MCP Configuration
 
@@ -406,6 +413,7 @@ z-base-32 encoded random value (used for session uniqueness)
 
 ### Known OAST Domains
 
+**Built-in domains:**
 - oast.pro
 - oast.live
 - oast.site
@@ -414,6 +422,22 @@ z-base-32 encoded random value (used for session uniqueness)
 - oast.me
 - interact.sh
 - interactsh.com
+
+**Extended Domain Lists**
+
+For comprehensive OAST domain coverage, `roast` recognizes domains from actively maintained threat intelligence lists:
+
+- **Interactsh domains:** [darses/cti interactsh-domains.txt](https://github.com/darses/cti/blob/main/interactsh-domains.txt) - 400+ Interactsh server domains discovered via Shodan
+- **Burp Collaborator domains:** [darses/cti burpsuite-domains.txt](https://github.com/darses/cti/blob/main/burpsuite-domains.txt) - Burp Collaborator Server domains found in SMTP services
+
+These lists are maintained by [darses](https://github.com/darses) and updated regularly through automated Shodan queries. The Interactsh domains are discovered using:
+- `product:"Interactsh SMTP Server" port:25`
+- `http.html:"<h1> Interactsh Server </h1>"`
+
+Burp Collaborator domains are found using:
+- `port:25 "Burp Collaborator Server ready"`
+
+**Note:** `roast` will attempt to decode any domain matching the Interactsh preamble format, regardless of the domain suffix. These lists help identify legitimate OAST infrastructure for threat intelligence correlation.
 
 ## Use Cases
 
@@ -442,6 +466,7 @@ go test -cover ./...
 - [Base32hex (RFC 4648)](https://datatracker.ietf.org/doc/html/rfc4648#section-7)
 - [z-base-32](https://philzimmermann.com/docs/human-oriented-base-32-encoding.txt)
 - [MCP Specification](https://spec.modelcontextprotocol.io/)
+- [darses/cti](https://github.com/darses/cti) - Actively maintained lists of OAST domain infrastructure
 
 ## License
 

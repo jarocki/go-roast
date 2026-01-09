@@ -46,12 +46,22 @@ func Serve() error {
 		getDomainsResource,
 	)
 
+	s.AddResource(
+		mcp.NewResource("oast://intel", "External OAST domain intelligence",
+			mcp.WithResourceDescription("Information about actively maintained OAST domain lists"),
+			mcp.WithMIMEType("text/plain")),
+		getIntelResource,
+	)
+
 	// Register tools
 	s.AddTool(decodeOASTTool(), handleDecodeOAST)
 	s.AddTool(extractOASTTool(), handleExtractOAST)
 	s.AddTool(extractOASTFileTool(), handleExtractOASTFile)
 	s.AddTool(validateOASTTool(), handleValidateOAST)
 	s.AddTool(campaignAnalysisTool(), handleCampaignAnalysis)
+	s.AddTool(fetchInteractshDomainsTool(), handleFetchInteractshDomains)
+	s.AddTool(fetchBurpCollaboratorDomainsTool(), handleFetchBurpCollaboratorDomains)
+	s.AddTool(oastIntelTool(), handleOASTIntel)
 
 	return server.ServeStdio(s)
 }
@@ -139,6 +149,51 @@ Uses **z-base-32** alphabet: ybndrfg8ejkmcpqxot1uwisza345h769
 
 Note: Domains with strings of 'y' in the nonce indicate Interactsh CLI v1.0.1
 or earlier (used timestamp+counter scheme instead of random values).
+`
+
+	return []interface{}{
+		mcp.TextContent{
+			Type: "text",
+			Text: content,
+		},
+	}, nil
+}
+
+func getIntelResource(request mcp.ReadResourceRequest) ([]interface{}, error) {
+	content := `# External OAST Domain Intelligence
+
+## darses/cti Repository
+- **Repository:** https://github.com/darses/cti
+- **Maintainer:** darses
+- **Description:** "Free CTI, so it can't be bad"
+- **Last Update:** 2026-01-07
+
+## Interactsh Domains (400+ domains)
+**URL:** https://raw.githubusercontent.com/darses/cti/refs/heads/main/interactsh-domains.txt
+
+**Discovery Methods:**
+- Shodan: product:"Interactsh SMTP Server" port:25
+- Shodan: http.html:"<h1> Interactsh Server </h1>"
+
+**Examples:**
+- .oast.pro (official)
+- .interact.sh (official)
+- .interactsh.dev.netspi.net (NetSPI)
+- .oast.l00t.fi (researcher)
+
+## Burp Collaborator Domains
+**URL:** https://raw.githubusercontent.com/darses/cti/refs/heads/main/burpsuite-domains.txt
+
+**Discovery Method:**
+- Shodan: port:25 "Burp Collaborator Server ready"
+
+**Note:** Burp Collaborator uses different format than Interactsh
+
+## Usage
+Use MCP tools:
+- fetch_interactsh_domains
+- fetch_burp_collaborator_domains
+- oast_threat_intel
 `
 
 	return []interface{}{
