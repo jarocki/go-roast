@@ -33,6 +33,7 @@ func main() {
 	rootCmd.AddCommand(decodeCmd())
 	rootCmd.AddCommand(extractCmd())
 	rootCmd.AddCommand(analyzeCmd())
+	rootCmd.AddCommand(pipeCmd())
 	rootCmd.AddCommand(mcpCmd())
 
 	if err := rootCmd.Execute(); err != nil {
@@ -176,6 +177,124 @@ func analyzeCmd() *cobra.Command {
 
 	cmd.Flags().StringVarP(&fileFlag, "file", "f", "", "File to analyze (if not provided, reads from stdin)")
 	cmd.Flags().BoolVar(&includeJSON, "include-json", false, "Include raw JSON data in markdown output")
+
+	return cmd
+}
+
+func pipeCmd() *cobra.Command {
+	var fileFlag string
+	var skipEmpty bool
+
+	cmd := &cobra.Command{
+		Use:   "pipe",
+		Short: "Process input line-by-line for DuckDB integration",
+		Long: `Process input line by line, extracting and decoding OAST domains.
+
+Emits NDJSON (newline-delimited JSON) where each line contains:
+  - line_num: 1-indexed line number
+  - line: original line text
+  - oast_count: number of OAST domains found
+  - oast_decoded: array of decoded OAST objects
+
+Example DuckDB usage:
+  -- Read all lines with decoded OASTs
+  SELECT * FROM read_json('/path/to/output.ndjson');
+
+  -- Unnest decoded OASTs for per-domain analysis
+  SELECT line_num, unnest(oast_decoded) as oast
+  FROM read_json('/path/to/output.ndjson')
+  WHERE oast_count > 0;`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// PipeRecord is the output structure for each line
+			type PipeRecord struct {
+				LineNum     int                   `json:"line_num"`
+				Line        string                `json:"line"`
+				OASTCount   int                   `json:"oast_count"`
+				OASTDecoded []*roast.DecodedOAST  `json:"oast_decoded"`
+			}
+
+			var reader *bufio.Scanner
+			var file *os.File
+
+			if fileFlag != "" {
+				var err error
+				file, err = os.Open(fileFlag)
+				if err != nil {
+					return fmt.Errorf("failed to open file: %w", err)
+				}
+				defer file.Close()
+				reader = bufio.NewScanner(file)
+			} else {
+				reader = bufio.NewScanner(os.Stdin)
+			}
+
+			encoder := json.NewEncoder(os.Stdout)
+			// No indentation for compact NDJSON
+			lineNum := 0
+			processedCount := 0
+			matchedCount := 0
+
+			for reader.Scan() {
+				lineNum++
+				line := reader.Text()
+
+				// Extract OAST domains from the line
+				matches := roast.ExtractFromString(line)
+
+				// Decode each extracted domain
+				var decoded []*roast.DecodedOAST
+				for _, match := range matches {
+					d, err := roast.Decode(match.Subdomain)
+					if err != nil {
+						// Include invalid decodes with error set
+						decoded = append(decoded, &roast.DecodedOAST{
+							Original: match.Subdomain,
+							Valid:    false,
+							Error:    err.Error(),
+						})
+					} else {
+						decoded = append(decoded, d)
+					}
+				}
+
+				oastCount := len(decoded)
+
+				// Skip lines with no OASTs if requested
+				if skipEmpty && oastCount == 0 {
+					continue
+				}
+
+				processedCount++
+				if oastCount > 0 {
+					matchedCount++
+				}
+
+				record := PipeRecord{
+					LineNum:     lineNum,
+					Line:        line,
+					OASTCount:   oastCount,
+					OASTDecoded: decoded,
+				}
+
+				if err := encoder.Encode(record); err != nil {
+					return fmt.Errorf("failed to encode JSON: %w", err)
+				}
+			}
+
+			if err := reader.Err(); err != nil {
+				return fmt.Errorf("failed to read input: %w", err)
+			}
+
+			if !quietFlag {
+				fmt.Fprintf(os.Stderr, "Processed %d lines, %d with OAST domains\n", processedCount, matchedCount)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&fileFlag, "file", "f", "", "Input file (if omitted, reads stdin)")
+	cmd.Flags().BoolVar(&skipEmpty, "skip-empty", false, "Skip lines with no OAST domains")
 
 	return cmd
 }
