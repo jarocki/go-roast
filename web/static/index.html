@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>roast - OAST Domain Analyzer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+<h1>roast</h1>
+<p class="subtitle">Interactsh OAST Domain Analyzer</p>
+</header>
+
+<main>
+<section class="input-section">
+<div class="tabs">
+  <button class="tab active" data-tab="paste">Paste Domains</button>
+  <button class="tab" data-tab="upload">Upload CSV</button>
+</div>
+
+<div class="tab-content active" id="tab-paste">
+  <textarea id="domain-input" placeholder="Paste OAST domains or text containing domains (one per line)..." rows="6"></textarea>
+</div>
+
+<div class="tab-content" id="tab-upload">
+  <div class="drop-zone" id="drop-zone">
+    <p>Drop CSV file here or <label for="file-input" class="file-label">browse</label></p>
+    <input type="file" id="file-input" accept=".csv,.txt" hidden>
+    <p class="drop-hint">Domains will be auto-detected from CSV columns</p>
+  </div>
+</div>
+
+<div class="actions">
+  <select id="action-select">
+    <option value="decode">Decode</option>
+    <option value="classify">Classify</option>
+    <option value="extract">Extract &amp; Decode</option>
+    <option value="analyze">Campaign Analysis</option>
+  </select>
+  <button id="submit-btn">Analyze</button>
+</div>
+</section>
+
+<section class="results-section" id="results-section" hidden>
+<h2>Results</h2>
+<div id="results-container"></div>
+</section>
+</main>
+
+<footer>
+<p>roast v1.0.0 &mdash; <a href="https://codeberg.org/hrbrmstr/go-roast">source</a></p>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

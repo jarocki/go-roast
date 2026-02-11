@@ -98,6 +98,18 @@ test-extract:
     @echo "Testing extract command..."
     @echo "Found: c58bduhe008dovpvhvugcfemp9yyyyyyn.oast.pro" | ./{{binary}} extract --decode -o json | jq .
 
+# Test classification engine
+test-classify:
+    go test -v -run TestClassify ./pkg/roast/
+
+# Test web handlers
+test-web:
+    go test -v ./web/
+
+# Start web UI server
+serve: build
+    ./{{binary}} serve
+
 # Run all functional tests
 test-all: test test-decode test-extract test-mcp
     @echo "✓ All tests passed"

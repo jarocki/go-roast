@@ -11,7 +11,7 @@ import (
 // Pattern to match OAST domains in text
 // Matches: subdomain (20+ base32hex chars + optional nonce) . known-domain
 var oastPattern = regexp.MustCompile(
-	`(?i)([a-v0-9]{20,}[a-z0-9_-]*)\.(oast\.(?:pro|live|site|online|fun|me)|interact\.sh|interactsh\.com)`,
+	`(?i)([a-z0-9]{20,}[a-z0-9_-]*)\.(oast\.(?:pro|live|site|online|fun|me)|interact\.sh|interactsh\.com)`,
 )
 
 // ExtractFromString finds all OAST domains in a string

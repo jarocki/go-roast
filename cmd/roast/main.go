@@ -10,6 +10,7 @@ import (
 
 	"codeberg.org/hrbrmstr/go-roast/mcp"
 	"codeberg.org/hrbrmstr/go-roast/pkg/roast"
+	"codeberg.org/hrbrmstr/go-roast/web"
 	"github.com/spf13/cobra"
 )
 
@@ -35,6 +36,7 @@ func main() {
 	rootCmd.AddCommand(analyzeCmd())
 	rootCmd.AddCommand(pipeCmd())
 	rootCmd.AddCommand(mcpCmd())
+	rootCmd.AddCommand(serveCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -310,6 +312,25 @@ func mcpCmd() *cobra.Command {
 	}
 }
 
+func serveCmd() *cobra.Command {
+	var addr string
+	var port int
+
+	cmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Start web UI server",
+		Long:  "Start the web interface for decoding and analyzing OAST domains.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return web.Serve(addr, port)
+		},
+	}
+
+	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1", "Listen address")
+	cmd.Flags().IntVar(&port, "port", 8080, "Listen port")
+
+	return cmd
+}
+
 func outputResults(results []*roast.DecodedOAST, format string) error {
 	switch strings.ToLower(format) {
 	case "json":
@@ -373,12 +394,20 @@ func outputCSV(results []*roast.DecodedOAST) error {
 
 	if err := w.Write([]string{
 		"Original", "Valid", "Timestamp", "MachineID", "PID", "Counter",
-		"KSort", "Campaign", "Nonce", "Error",
+		"KSort", "Campaign", "Nonce", "ClientType", "ServerVersion", "Decodable", "Confidence", "Error",
 	}); err != nil {
 		return err
 	}
 
 	for _, r := range results {
+		clientType, serverVersion, decodable, confidence := "", "", "", ""
+		if r.Classification != nil {
+			clientType = string(r.Classification.ClientType)
+			serverVersion = string(r.Classification.ServerVersion)
+			decodable = fmt.Sprintf("%t", r.Classification.Decodable)
+			confidence = r.Classification.Confidence
+		}
+
 		if err := w.Write([]string{
 			r.Original,
 			fmt.Sprintf("%t", r.Valid),
@@ -389,6 +418,10 @@ func outputCSV(results []*roast.DecodedOAST) error {
 			r.KSort,
 			r.Campaign,
 			r.Nonce,
+			clientType,
+			serverVersion,
+			decodable,
+			confidence,
 			r.Error,
 		}); err != nil {
 			return err
@@ -399,9 +432,9 @@ func outputCSV(results []*roast.DecodedOAST) error {
 }
 
 func outputTable(results []*roast.DecodedOAST) error {
-	fmt.Printf("%-40s %-6s %-20s %-12s %-7s %-10s %-10s %-10s\n",
-		"Original", "Valid", "Timestamp", "MachineID", "PID", "Counter", "KSort", "Campaign")
-	fmt.Println(strings.Repeat("-", 140))
+	fmt.Printf("%-40s %-6s %-20s %-12s %-7s %-10s %-8s %-8s %-8s %-20s %-13s\n",
+		"Original", "Valid", "Timestamp", "MachineID", "PID", "Counter", "Client", "Version", "Conf", "Nonce-Timestamp", "Nonce-Counter")
+	fmt.Println(strings.Repeat("-", 180))
 
 	for _, r := range results {
 		status := "✓"
@@ -414,15 +447,31 @@ func outputTable(results []*roast.DecodedOAST) error {
 			timestamp = ""
 		}
 
-		fmt.Printf("%-40s %-6s %-20s %-12s %-7d %-10d %-10s %-10s\n",
+		clientType, version, conf := "", "", ""
+		nonceTs, nonceCtr := "", ""
+		if r.Classification != nil {
+			clientType = string(r.Classification.ClientType)
+			version = string(r.Classification.ServerVersion)
+			conf = r.Classification.Confidence
+			if r.Classification.NonceAnalysis != nil {
+				na := r.Classification.NonceAnalysis
+				nonceTs = na.NonceTimestamp.Format("2006-01-02 15:04:05")
+				nonceCtr = fmt.Sprintf("%d", na.NonceCounter)
+			}
+		}
+
+		fmt.Printf("%-40s %-6s %-20s %-12s %-7d %-10d %-8s %-8s %-8s %-20s %-13s\n",
 			truncate(r.Original, 40),
 			status,
 			timestamp,
 			r.MachineID,
 			r.PID,
 			r.Counter,
-			r.KSort,
-			r.Campaign,
+			clientType,
+			version,
+			conf,
+			nonceTs,
+			nonceCtr,
 		)
 
 		if r.Error != "" {
