@@ -55,6 +55,51 @@ func handleDecodeOAST(args map[string]interface{}) (*mcp.CallToolResult, error) 
 	return mcp.NewToolResultText(string(data)), nil
 }
 
+func classifyOASTTool() mcp.Tool {
+	return mcp.NewTool("classify_oast",
+		mcp.WithDescription("Classify an OAST domain by client type (CLI/web) and server version (v1.0.1/v1.0.2+) without full decode"),
+		mcp.WithString("domain",
+			mcp.Required(),
+			mcp.Description("OAST domain to classify (subdomain or full FQDN)"),
+		),
+	)
+}
+
+func handleClassifyOAST(args map[string]interface{}) (*mcp.CallToolResult, error) {
+	domain, ok := args["domain"].(string)
+	if !ok {
+		return mcp.NewToolResultError("domain must be a string"), nil
+	}
+
+	// Extract subdomain
+	subdomain := domain
+	if idx := strings.Index(domain, "."); idx > 0 {
+		subdomain = domain[:idx]
+	}
+	subdomain = strings.ToLower(subdomain)
+
+	// Try decode to get CID timestamp for nonce analysis
+	decoded, _ := roast.Decode(domain)
+	var cidTimestamp time.Time
+	if decoded != nil && decoded.Valid {
+		cidTimestamp = decoded.Timestamp
+	}
+
+	classification := roast.ClassifyDomain(subdomain, cidTimestamp)
+
+	result := map[string]interface{}{
+		"domain":         domain,
+		"classification": classification,
+	}
+
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to encode results: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(string(data)), nil
+}
+
 func extractOASTTool() mcp.Tool {
 	return mcp.NewTool("extract_oast",
 		mcp.WithDescription("Extract OAST domains from text"),

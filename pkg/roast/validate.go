@@ -47,6 +47,48 @@ func KnownOASTDomains() []string {
 	return result
 }
 
+// IsValidOASTSubdomainExtended checks if a string looks like a valid OAST subdomain,
+// recognizing both CLI (base32hex) and web (all-alpha) client formats.
+// Returns validity and the detected client type.
+func IsValidOASTSubdomainExtended(s string) (bool, ClientType) {
+	if s == "" {
+		return false, ClientUnknown
+	}
+
+	subdomain := s
+	if idx := strings.Index(s, "."); idx > 0 {
+		subdomain = s[:idx]
+	}
+
+	if len(subdomain) < 20 {
+		return false, ClientUnknown
+	}
+
+	preamble := strings.ToLower(subdomain[:20])
+
+	// Check CLI: valid base32hex [0-9a-v]
+	if IsValidPreamble(preamble) {
+		return true, ClientCLI
+	}
+
+	// Check web: all lowercase alpha [a-z]
+	if isAllLowerAlpha(preamble) {
+		return true, ClientWeb
+	}
+
+	return false, ClientUnknown
+}
+
+// isAllLowerAlpha returns true if s contains only lowercase ASCII letters.
+func isAllLowerAlpha(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 'a' || s[i] > 'z' {
+			return false
+		}
+	}
+	return len(s) > 0
+}
+
 // IsKnownOASTDomain checks if the given domain is a known OAST domain
 func IsKnownOASTDomain(domain string) bool {
 	domain = strings.ToLower(domain)

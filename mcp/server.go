@@ -56,6 +56,7 @@ func Serve() error {
 
 	// Register tools
 	s.AddTool(decodeOASTTool(), handleDecodeOAST)
+	s.AddTool(classifyOASTTool(), handleClassifyOAST)
 	s.AddTool(extractOASTTool(), handleExtractOAST)
 	s.AddTool(extractOASTFileTool(), handleExtractOASTFile)
 	s.AddTool(validateOASTTool(), handleValidateOAST)

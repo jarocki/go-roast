@@ -12,8 +12,9 @@ type DecodedOAST struct {
 	Nonce     string    `json:"nonce,omitempty"`     // The nonce portion (if present)
 	KSort     string    `json:"ksort"`               // First 6 chars of preamble (for K-sorting)
 	Campaign  string    `json:"campaign"`            // Chars 7-11 of preamble (campaign identifier)
-	Valid     bool      `json:"valid"`               // Whether decoding succeeded
-	Error     string    `json:"error,omitempty"`     // Error message if invalid
+	Valid          bool            `json:"valid"`                        // Whether decoding succeeded
+	Error          string          `json:"error,omitempty"`              // Error message if invalid
+	Classification *Classification `json:"classification,omitempty"`     // Client type and version classification
 }
 
 // OASTMatch represents an extracted OAST domain from text

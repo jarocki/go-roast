@@ -9,15 +9,17 @@ import (
 
 // CampaignStats contains statistics for a specific campaign
 type CampaignStats struct {
-	CampaignID   string    `json:"campaign_id"`
-	Count        int       `json:"count"`
-	FirstSeen    time.Time `json:"first_seen"`
-	LastSeen     time.Time `json:"last_seen"`
-	MachineIDs   []string  `json:"machine_ids"`
-	PIDs         []uint16  `json:"pids"`
-	CounterMin   uint32    `json:"counter_min"`
-	CounterMax   uint32    `json:"counter_max"`
-	KSortValues  []string  `json:"ksort_values"`
+	CampaignID     string                   `json:"campaign_id"`
+	Count          int                      `json:"count"`
+	FirstSeen      time.Time                `json:"first_seen"`
+	LastSeen       time.Time                `json:"last_seen"`
+	MachineIDs     []string                 `json:"machine_ids"`
+	PIDs           []uint16                 `json:"pids"`
+	CounterMin     uint32                   `json:"counter_min"`
+	CounterMax     uint32                   `json:"counter_max"`
+	KSortValues    []string                 `json:"ksort_values"`
+	ClientTypes    map[ClientType]int       `json:"client_types,omitempty"`
+	ServerVersions map[ServerVersion]int    `json:"server_versions,omitempty"`
 }
 
 // CampaignAnalysis contains the full analysis of OAST domains
@@ -34,6 +36,8 @@ type CampaignAnalysis struct {
 	MachineIDs      []string                 `json:"machine_ids"`
 	PIDs            []uint16                 `json:"pids"`
 	Campaigns       map[string]*CampaignStats `json:"campaigns"`
+	ClientTypes     map[ClientType]int        `json:"client_types,omitempty"`
+	ServerVersions  map[ServerVersion]int     `json:"server_versions,omitempty"`
 }
 
 // AnalyzeCampaignFromFile analyzes OAST domains from a file and returns campaign statistics
@@ -54,14 +58,22 @@ func AnalyzeCampaignFromString(text string) *CampaignAnalysis {
 
 func analyzeCampaign(matches []OASTMatch, decoded []*DecodedOAST) *CampaignAnalysis {
 	analysis := &CampaignAnalysis{
-		TotalDomains: len(matches),
-		Campaigns:    make(map[string]*CampaignStats),
+		TotalDomains:   len(matches),
+		Campaigns:      make(map[string]*CampaignStats),
+		ClientTypes:    make(map[ClientType]int),
+		ServerVersions: make(map[ServerVersion]int),
 	}
 
 	machineIDSet := make(map[string]bool)
 	pidSet := make(map[uint16]bool)
 
 	for _, d := range decoded {
+		// Aggregate classification even for invalid (web client) domains
+		if d.Classification != nil {
+			analysis.ClientTypes[d.Classification.ClientType]++
+			analysis.ServerVersions[d.Classification.ServerVersion]++
+		}
+
 		if !d.Valid {
 			analysis.InvalidDomains++
 			continue
@@ -90,17 +102,24 @@ func analyzeCampaign(matches []OASTMatch, decoded []*DecodedOAST) *CampaignAnaly
 		stats, exists := analysis.Campaigns[campaignID]
 		if !exists {
 			stats = &CampaignStats{
-				CampaignID: campaignID,
-				FirstSeen:  d.Timestamp,
-				LastSeen:   d.Timestamp,
-				CounterMin: d.Counter,
-				CounterMax: d.Counter,
+				CampaignID:     campaignID,
+				FirstSeen:      d.Timestamp,
+				LastSeen:       d.Timestamp,
+				CounterMin:     d.Counter,
+				CounterMax:     d.Counter,
+				ClientTypes:    make(map[ClientType]int),
+				ServerVersions: make(map[ServerVersion]int),
 			}
 			analysis.Campaigns[campaignID] = stats
 		}
 
 		// Update campaign stats
 		stats.Count++
+
+		if d.Classification != nil {
+			stats.ClientTypes[d.Classification.ClientType]++
+			stats.ServerVersions[d.Classification.ServerVersion]++
+		}
 
 		if d.Timestamp.Before(stats.FirstSeen) {
 			stats.FirstSeen = d.Timestamp
@@ -177,6 +196,26 @@ func (a *CampaignAnalysis) FormatMarkdown() string {
 		sb.WriteString(fmt.Sprintf("- **First Seen:** %s\n", a.FirstSeen.Format(time.RFC3339)))
 		sb.WriteString(fmt.Sprintf("- **Last Seen:** %s\n", a.LastSeen.Format(time.RFC3339)))
 		sb.WriteString(fmt.Sprintf("- **Time Span:** %s\n", a.TimeSpan))
+	}
+
+	// Classification summary
+	if len(a.ClientTypes) > 0 {
+		sb.WriteString("\n## Classification\n\n")
+		sb.WriteString("**Client Types:** ")
+		var ctParts []string
+		for ct, count := range a.ClientTypes {
+			ctParts = append(ctParts, fmt.Sprintf("%s (%d)", ct, count))
+		}
+		sort.Strings(ctParts)
+		sb.WriteString(strings.Join(ctParts, ", ") + "\n")
+
+		sb.WriteString("**Server Versions:** ")
+		var svParts []string
+		for sv, count := range a.ServerVersions {
+			svParts = append(svParts, fmt.Sprintf("%s (%d)", sv, count))
+		}
+		sort.Strings(svParts)
+		sb.WriteString(strings.Join(svParts, ", ") + "\n")
 	}
 
 	// Machine IDs

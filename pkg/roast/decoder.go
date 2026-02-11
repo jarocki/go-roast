@@ -43,6 +43,15 @@ func Decode(input string) (*DecodedOAST, error) {
 
 	// Validate preamble contains only base32hex characters
 	if !IsValidPreamble(preamble) {
+		// Check if this is a web client domain (all lowercase alpha)
+		if isAllLowerAlpha(preamble) {
+			if len(subdomain) > 20 {
+				result.Nonce = subdomain[20:]
+			}
+			result.Error = "web client domain: preamble is not base32hex-decodable"
+			result.Classification = ClassifyDomain(subdomain, time.Time{})
+			return result, fmt.Errorf(result.Error)
+		}
 		result.Error = "preamble contains invalid base32hex characters"
 		return result, fmt.Errorf(result.Error)
 	}
@@ -78,6 +87,10 @@ func Decode(input string) (*DecodedOAST, error) {
 	result.Campaign = preamble[6:11]
 
 	result.Valid = true
+
+	// Classify after successful CLI decode, using decoded CID timestamp for nonce analysis
+	result.Classification = ClassifyDomain(subdomain, result.Timestamp)
+
 	return result, nil
 }
 
