@@ -229,6 +229,34 @@ func TestAnalyzeNonce(t *testing.T) {
 		}
 		t.Logf("commentary: %v", na.Commentary)
 	})
+
+	t.Run("negative delta — nonce predates CID", func(t *testing.T) {
+		cidTime := time.Unix(1737000000, 0)  // 2025
+		nonceTime := time.Unix(1632679676, 0) // 2021
+		na := analyzeNonce(nonceTime, 1, cidTime)
+
+		if na.SessionAgeSecs >= 0 {
+			t.Errorf("session_age_secs=%d, want negative", na.SessionAgeSecs)
+		}
+		// Must flag as inconsistent, NOT "matches cid_timestamp"
+		hasInconsistent := false
+		hasMatches := false
+		for _, c := range na.Commentary {
+			if len(c) > 20 && c[:20] == "nonce_timestamp pred" {
+				hasInconsistent = true
+			}
+			if len(c) > 20 && c[:20] == "nonce_timestamp matc" {
+				hasMatches = true
+			}
+		}
+		if !hasInconsistent {
+			t.Error("expected 'nonce_timestamp predates' commentary for negative delta")
+		}
+		if hasMatches {
+			t.Error("should NOT report 'nonce_timestamp matches cid_timestamp' when years apart")
+		}
+		t.Logf("commentary: %v", na.Commentary)
+	})
 }
 
 func TestCombineConfidence(t *testing.T) {

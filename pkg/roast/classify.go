@@ -197,29 +197,31 @@ func analyzeNonce(nonceTimestamp time.Time, nonceCounter uint32, cidTimestamp ti
 	// Session age: NonceTimestamp - CIDTimestamp
 	if !cidTimestamp.IsZero() {
 		delta := nonceTimestamp.Sub(cidTimestamp)
-		if delta < 0 {
-			delta = 0
-		}
 		na.SessionAgeSecs = int64(delta.Seconds())
-		na.SessionAge = formatDuration(delta)
 
-		// Commentary on session age
-		switch {
-		case delta < 2*time.Second:
+		if delta < 0 {
+			// Nonce timestamp predates CID — anomalous (nonce should be >= CID)
+			absDelta := -delta
+			na.SessionAge = "-" + formatDuration(absDelta)
 			na.Commentary = append(na.Commentary,
-				fmt.Sprintf("session_age=%s: domain generated at client startup (likely automated/scripted)", na.SessionAge))
-		case delta < time.Hour:
-			na.Commentary = append(na.Commentary,
-				fmt.Sprintf("session_age=%s: short client session", na.SessionAge))
-		default:
-			na.Commentary = append(na.Commentary,
-				fmt.Sprintf("session_age=%s: long-running client session", na.SessionAge))
-		}
+				fmt.Sprintf("nonce_timestamp predates cid_timestamp by %s — timestamps inconsistent (possible clock skew, recycled nonce, or misclassified version)", formatDuration(absDelta)))
+		} else {
+			na.SessionAge = formatDuration(delta)
 
-		// Check if timestamps match closely
-		if na.SessionAgeSecs <= 1 {
-			na.Commentary = append(na.Commentary,
-				"nonce_timestamp matches cid_timestamp: single-use client (generated one domain at init)")
+			// Commentary on session age
+			switch {
+			case delta < 2*time.Second:
+				na.Commentary = append(na.Commentary,
+					fmt.Sprintf("session_age=%s: domain generated at client startup (likely automated/scripted)", na.SessionAge))
+				na.Commentary = append(na.Commentary,
+					"nonce_timestamp matches cid_timestamp: single-use client (generated one domain at init)")
+			case delta < time.Hour:
+				na.Commentary = append(na.Commentary,
+					fmt.Sprintf("session_age=%s: short client session", na.SessionAge))
+			default:
+				na.Commentary = append(na.Commentary,
+					fmt.Sprintf("session_age=%s: long-running client session", na.SessionAge))
+			}
 		}
 	}
 
