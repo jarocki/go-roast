@@ -50,7 +50,13 @@
     if (fileInput.files[0]) processFile(fileInput.files[0]);
   });
 
-  dropZone.addEventListener('click', () => fileInput.click());
+  dropZone.addEventListener('click', e => {
+    // Avoid double-triggering: the <label for="file-input"> already opens the dialog
+    // natively, so only call fileInput.click() when the click didn't originate from
+    // the label or file input itself.
+    if (e.target === fileInput || e.target.closest('label[for="file-input"]')) return;
+    fileInput.click();
+  });
 
   function processFile(file) {
     const reader = new FileReader();
