@@ -33,6 +33,8 @@ go build -o roast ./cmd/roast
 | `roast decode` | Decode OAST domains (one per line) |
 | `roast extract` | Extract OAST domains from text/logs |
 | `roast analyze` | Analyze domains for campaign patterns |
+| `roast pipe` | Line-by-line NDJSON output for DuckDB integration |
+| `roast serve` | Start web UI server |
 | `roast mcp` | Start MCP stdio server |
 
 ### Global Flags
@@ -114,11 +116,15 @@ roast analyze -f domains.txt -o markdown --include-json
 - `--include-json` - Include raw JSON data in markdown output
 
 **Campaign analysis provides:**
+- Executive summary with high-level findings
 - Overall statistics (total domains, valid/invalid, unique campaigns/machines/PIDs)
 - Time span of activity (first seen, last seen, duration)
-- Per-campaign breakdown with counts, timestamps, machine IDs, PIDs, and K-sort values
+- Classification breakdown (client types, server versions) with per-campaign detail
+- Session analytics from v1.0.1 nonces (session age, domain generation velocity)
+- Cross-reference findings (corroboration or warnings across same-machine domains)
+- Per-campaign narratives with nonce timestamp ranges, counter ranges, and session ages
+- Activity timeline across all campaigns
 - Correlation data for threat intelligence
-- Counter ranges to identify campaign progression
 
 ### Example Output
 
@@ -127,14 +133,39 @@ roast analyze -f domains.txt -o markdown --include-json
 [
   {
     "original": "c58bduhe008dovpvhvugcfemp9yyyyyyn.oast.pro",
-    "timestamp": "2024-01-15T10:30:45Z",
-    "machine_id": "12:34:56",
-    "pid": 1234,
-    "counter": 5678,
+    "timestamp": "2021-09-26T18:07:54Z",
+    "machine_id": "2e:00:10",
+    "pid": 56447,
+    "counter": 4165629,
     "nonce": "cfemp9yyyyyyn",
     "ksort": "c58bdu",
     "campaign": "he008",
-    "valid": true
+    "valid": true,
+    "classification": {
+      "client_type": "cli",
+      "server_version": "v1.0.1",
+      "confidence": "high",
+      "reasoning": [
+        "preamble contains digits — CLI client (base32hex)",
+        "nonce decodes to valid timestamp 2021-09-26T18:07:56Z — v1.0.1",
+        "nonce counter=1 (domain sequence in process)"
+      ],
+      "decodable": true,
+      "nonce_analysis": {
+        "nonce_timestamp": "2021-09-26T18:07:56Z",
+        "nonce_counter": 1,
+        "session_age": "2 seconds",
+        "session_age_secs": 2,
+        "domain_sequence": 1,
+        "timestamp_reliable": true,
+        "commentary": [
+          "session_age=2 seconds: short client session",
+          "nonce_counter=1: first domain generated in this process"
+        ]
+      }
+    },
+    "nonce_timestamp": "2021-09-26T18:07:56Z",
+    "nonce_counter": 1
   }
 ]
 ```
@@ -143,15 +174,26 @@ roast analyze -f domains.txt -o markdown --include-json
 ```markdown
 # OAST Campaign Analysis
 
+## Executive Summary
+
+Analysis of 15 domains across 3 campaigns spanning 2.2 days.
+Found 2 machine IDs and 1 PIDs. Classification: v1.0.1 (15).
+
 ## Overall Statistics
 - **Total Domains Found:** 15
 - **Valid Domains:** 15
 - **Unique Campaigns:** 3
 - **Unique Machine IDs:** 2
 - **Unique PIDs:** 1
-- **First Seen:** 2024-01-15T10:30:45Z
-- **Last Seen:** 2024-01-17T14:22:33Z
-- **Time Span:** 2.2 days
+
+## Session Analytics
+
+v1.0.1 nonce-derived session data:
+
+**Campaign `he008`:**
+- Nonce Timestamp Range: 2024-01-15T10:30:45Z to 2024-01-15T15:02:12Z
+- Session Age Range: 2s to 16200s
+- Domain Generation Velocity: 1.8 domains/hour
 
 ## Campaign Details
 
@@ -161,6 +203,13 @@ roast analyze -f domains.txt -o markdown --include-json
 - **Counter Range:** 5678 - 5801
 - **Machine IDs (1):** `12:34:56`
 - **PIDs (1):** `1234`
+
+Campaign he008 was active for 4.5 hours across 1 machines, generating 8 domains.
+
+## Timeline
+
+Activity observed from 2024-01-15T10:30:45Z to 2024-01-17T14:22:33Z (2.2 days).
+15 domains decoded across 3 campaigns from 2 unique machines.
 ```
 
 ## MCP Server
@@ -282,6 +331,64 @@ The prompt provides context for intelligent analysis of OAST domains without nee
 
 This rich context allows Claude to provide expert-level analysis and guidance when working with OAST domains.
 
+## Web UI
+
+Start the web interface for interactive domain analysis:
+
+```bash
+# Start on default port (8080)
+roast serve
+
+# Custom address and port
+roast serve --addr 0.0.0.0 --port 9090
+```
+
+The web UI provides:
+- **Paste or upload** — paste domains directly or drag-and-drop CSV files
+- **Decode / Classify / Extract / Analyze** — all CLI capabilities in the browser
+- **Classification badges** — visual indicators for client type (CLI/web), server version (v1.0.1/v1.0.2+), and confidence (high/medium/low)
+- **Nonce analysis display** — decoded timestamps, counters, session age, and commentary
+- **Save CSV** — export any result set as a CSV file
+- **Download Report** — download campaign analysis as a markdown report
+
+## Domain Classification
+
+`roast` classifies OAST domains by **client type** and **server version** using character-set heuristics and nonce analysis.
+
+### Client Type Detection
+
+| Client | Signal | Confidence |
+|--------|--------|------------|
+| **CLI** | Preamble contains digits `[0-9]` (base32hex) | High |
+| **Web** | Preamble contains `[w-z]` (outside base32hex) | High |
+| **Unknown** | Preamble is all `[a-v]` (ambiguous) | Low |
+
+### Server Version Detection
+
+| Version | Signal | Confidence |
+|---------|--------|------------|
+| **v1.0.1** | Nonce zbase32-decodes to valid timestamp (2020-2030) | High |
+| **v1.0.1** | Valid timestamp but in the future | Medium |
+| **v1.0.1** | Valid timestamp but predates CID by >5 min | Low |
+| **v1.0.2+** | Nonce decodes to out-of-range timestamp | Medium |
+| **Unknown** | Nonce contains non-zbase32 chars (`l/v/0/2`) | High (web nonce) |
+
+### Nonce Analysis (v1.0.1)
+
+When a v1.0.1 nonce is detected, `roast` extracts:
+- **Nonce timestamp** — when the domain was generated (promoted to top-level JSON field when reliable)
+- **Nonce counter** — domain sequence number within the process
+- **Session age** — time between CID creation and domain generation
+- **Commentary** — automated analysis (startup domain, long session, high-volume generation, etc.)
+- **Timestamp reliability** — flagged as unreliable when future or predating CID
+
+### Cross-Reference Validation
+
+When decoding multiple domains in a batch, `roast` cross-references v1.0.1 classifications across domains sharing the same machine ID:
+- **All consistent** — confidence upgraded, domains corroborate each other
+- **Mixed versions** — warning added that some classifications may be unreliable
+- **Single domain** — no corroboration possible, classification stands as-is
+
 ## Library Usage
 
 ### Core Types
@@ -289,16 +396,19 @@ This rich context allows Claude to provide expert-level analysis and guidance wh
 ```go
 // DecodedOAST contains the decoded metadata from an OAST domain
 type DecodedOAST struct {
-    Original  string    // Original subdomain/FQDN
-    Timestamp time.Time // Decoded timestamp
-    MachineID string    // Format: "xx:xx:xx" (3 hex bytes)
-    PID       uint16    // Process ID
-    Counter   uint32    // Counter value (24-bit)
-    Nonce     string    // The nonce portion (if present)
-    KSort     string    // First 6 chars of preamble (for K-sorting)
-    Campaign  string    // Chars 7-11 of preamble (campaign identifier)
-    Valid     bool      // Whether decoding succeeded
-    Error     string    // Error message if invalid
+    Original       string          // Original subdomain/FQDN
+    Timestamp      time.Time       // Decoded timestamp
+    MachineID      string          // Format: "xx:xx:xx" (3 hex bytes)
+    PID            uint16          // Process ID
+    Counter        uint32          // Counter value (24-bit)
+    Nonce          string          // The nonce portion (if present)
+    KSort          string          // First 6 chars of preamble (for K-sorting)
+    Campaign       string          // Chars 7-11 of preamble (campaign identifier)
+    Valid          bool            // Whether decoding succeeded
+    Error          string          // Error message if invalid
+    Classification *Classification // Client type, server version, and nonce analysis
+    NonceTimestamp *time.Time      // Promoted from nonce analysis (when reliable)
+    NonceCounter   *uint32         // Promoted from nonce analysis (when reliable)
 }
 
 // OASTMatch represents an extracted OAST domain from text
@@ -537,12 +647,22 @@ go test -cover ./...
 
 ## Acknowledgements
 
+This update was produced by **John Jarocki** ([@jarocki](https://github.com/jarocki)) and
+[Claude Code](https://claude.ai/claude-code). It couldn't have been done without this
+village of folks — I am eternally grateful for this amazing collaboration.
+
 - **Bob Rudis** ([@hrbrmstr](https://github.com/hrbrmstr)) — Creator of the original
   [roast](https://codeberg.org/hrbrmstr/go-roast) and
   [roast-mcp](https://codeberg.org/hrbrmstr/roast-mcp) codebase. His work on OAST domain
   decoding and MCP server integration forms the foundation of this project.
 - **Ian Campbell** — For collaboration and discussion on OAST domain analysis techniques,
-  discussed on Mastodon at the beginning of 2025.
+  discussed on Mastodon at the beginning of 2026.
+- **darses** ([@darses](https://github.com/darses)) — For the tireless work maintaining
+  [darses/cti](https://github.com/darses/cti), the actively curated lists of Interactsh and
+  Burp Collaborator domains that power roast's live threat intelligence capabilities.
+- **Claude System** — The [Claude Code Config](https://github.com/anthropics/claude-code)
+  harness was instrumental in orchestrating this update, providing the agent infrastructure,
+  hooks, and workflow guardrails that made a multi-issue implementation like this possible.
 
 ## License
 
