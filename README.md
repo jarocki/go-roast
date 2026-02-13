@@ -660,9 +660,10 @@ village of folks — I am eternally grateful for this amazing collaboration.
 - **darses** ([@darses](https://github.com/darses)) — For the tireless work maintaining
   [darses/cti](https://github.com/darses/cti), the actively curated lists of Interactsh and
   Burp Collaborator domains that power roast's live threat intelligence capabilities.
-- **Claude System** — The [Claude Code Config](https://github.com/anthropics/claude-code)
-  harness was instrumental in orchestrating this update, providing the agent infrastructure,
-  hooks, and workflow guardrails that made a multi-issue implementation like this possible.
+- **Claude System** by **Juan Andres Guerrero-Sade** ([@JAGS](https://github.com/JAGS)) —
+  The [Claude Code Config](https://github.com/anthropics/claude-code) harness was instrumental
+  in orchestrating this update, providing the agent infrastructure, hooks, and workflow
+  guardrails that made a multi-issue implementation like this possible.
 
 ## License
 
