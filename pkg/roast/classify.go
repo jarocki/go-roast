@@ -36,12 +36,13 @@ const (
 
 // NonceAnalysis contains decoded v1.0.1 nonce fields and derived session analytics.
 type NonceAnalysis struct {
-	NonceTimestamp  time.Time `json:"nonce_timestamp"`
-	NonceCounter    uint32    `json:"nonce_counter"`
-	SessionAge      string    `json:"session_age"`
-	SessionAgeSecs  int64     `json:"session_age_secs"`
-	DomainSequence  uint32    `json:"domain_sequence"`
-	Commentary      []string  `json:"commentary"`
+	NonceTimestamp    time.Time `json:"nonce_timestamp"`
+	NonceCounter      uint32    `json:"nonce_counter"`
+	SessionAge        string    `json:"session_age"`
+	SessionAgeSecs    int64     `json:"session_age_secs"`
+	DomainSequence    uint32    `json:"domain_sequence"`
+	TimestampReliable bool      `json:"timestamp_reliable"`
+	Commentary        []string  `json:"commentary"`
 }
 
 // Classification contains client type, server version, and evidence for a domain.
@@ -162,7 +163,24 @@ func classifyVersion(nonce string, cidTimestamp time.Time) (ServerVersion, *Nonc
 		reasons = append(reasons, fmt.Sprintf("nonce decodes to valid timestamp %s — v1.0.1", time.Unix(int64(ts), 0).UTC().Format(time.RFC3339)))
 		reasons = append(reasons, fmt.Sprintf("nonce counter=%d (domain sequence in process)", counter))
 
-		na := analyzeNonce(time.Unix(int64(ts), 0), counter, cidTimestamp)
+		now := time.Now()
+
+		// Future timestamp detection: valid range but ahead of current time
+		if ts > uint32(now.Unix()) {
+			reasons = append(reasons, "nonce timestamp is in the future — possible false positive v1.0.1 classification")
+			na := analyzeNonce(time.Unix(int64(ts), 0), counter, cidTimestamp, now)
+			return VersionV101, na, reasons, "medium"
+		}
+
+		na := analyzeNonce(time.Unix(int64(ts), 0), counter, cidTimestamp, now)
+
+		// Nonce-predates-CID reclassification: if timestamp is unreliable and
+		// nonce significantly predates CID, downgrade confidence
+		if !na.TimestampReliable && na.SessionAgeSecs < -300 {
+			reasons = append(reasons, "nonce timestamp predates CID by significant margin — likely not a real v1.0.1 timestamp")
+			return VersionV101, na, reasons, "low"
+		}
+
 		return VersionV101, na, reasons, "high"
 	}
 
@@ -187,11 +205,20 @@ func decodeV101Nonce(nonce string) (timestamp uint32, counter uint32, err error)
 }
 
 // analyzeNonce generates analytical commentary comparing CID and nonce fields.
-func analyzeNonce(nonceTimestamp time.Time, nonceCounter uint32, cidTimestamp time.Time) *NonceAnalysis {
+// The now parameter is used to detect future timestamps; pass time.Now() from callers.
+func analyzeNonce(nonceTimestamp time.Time, nonceCounter uint32, cidTimestamp time.Time, now time.Time) *NonceAnalysis {
 	na := &NonceAnalysis{
-		NonceTimestamp: nonceTimestamp,
-		NonceCounter:   nonceCounter,
-		DomainSequence: nonceCounter,
+		NonceTimestamp:    nonceTimestamp,
+		NonceCounter:      nonceCounter,
+		DomainSequence:    nonceCounter,
+		TimestampReliable: true,
+	}
+
+	// Future timestamp detection
+	if nonceTimestamp.After(now) {
+		na.TimestampReliable = false
+		na.Commentary = append(na.Commentary,
+			"nonce_timestamp is in the future — decoded value may not represent a real timestamp")
 	}
 
 	// Session age: NonceTimestamp - CIDTimestamp
@@ -205,6 +232,11 @@ func analyzeNonce(nonceTimestamp time.Time, nonceCounter uint32, cidTimestamp ti
 			na.SessionAge = "-" + formatDuration(absDelta)
 			na.Commentary = append(na.Commentary,
 				fmt.Sprintf("nonce_timestamp predates cid_timestamp by %s — timestamps inconsistent (possible clock skew, recycled nonce, or misclassified version)", formatDuration(absDelta)))
+
+			// Predates CID by more than 5 minutes — mark as unreliable
+			if na.SessionAgeSecs < -300 {
+				na.TimestampReliable = false
+			}
 		} else {
 			na.SessionAge = formatDuration(delta)
 

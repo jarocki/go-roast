@@ -8,6 +8,7 @@
 package roast
 
 import (
+	"encoding/binary"
 	"testing"
 	"time"
 )
@@ -123,6 +124,39 @@ func TestClassifyVersion(t *testing.T) {
 			t.Errorf("version=%q, want %q", version, VersionUnknown)
 		}
 	})
+
+	t.Run("future timestamp", func(t *testing.T) {
+		// Build a nonce whose first 4 bytes encode a timestamp ~1 year in the future
+		futureTS := uint32(time.Now().Unix()) + 365*24*3600
+		var buf [8]byte
+		binary.BigEndian.PutUint32(buf[0:4], futureTS)
+		binary.BigEndian.PutUint32(buf[4:8], 1) // counter=1
+		futureNonce := zbase32Encode(buf[:])
+
+		version, na, reasons, conf := classifyVersion(futureNonce, cidTime)
+		if version != VersionV101 {
+			t.Errorf("version=%q, want %q", version, VersionV101)
+		}
+		if conf != "medium" {
+			t.Errorf("confidence=%q, want medium (future timestamp should downgrade)", conf)
+		}
+		if na == nil {
+			t.Fatal("expected NonceAnalysis, got nil")
+		}
+		if na.TimestampReliable {
+			t.Error("expected TimestampReliable=false for future timestamp")
+		}
+		hasFutureReason := false
+		for _, r := range reasons {
+			if len(r) > 20 && r[:20] == "nonce timestamp is i" {
+				hasFutureReason = true
+			}
+		}
+		if !hasFutureReason {
+			t.Error("expected 'nonce timestamp is in the future' in reasons")
+		}
+		t.Logf("future nonce=%q, reasons=%v", futureNonce, reasons)
+	})
 }
 
 func TestDecodeV101Nonce(t *testing.T) {
@@ -199,7 +233,8 @@ func TestAnalyzeNonce(t *testing.T) {
 	t.Run("startup domain", func(t *testing.T) {
 		cidTime := time.Unix(1632679676, 0)
 		nonceTime := time.Unix(1632679676, 0) // same second
-		na := analyzeNonce(nonceTime, 1, cidTime)
+		now := time.Unix(1700000000, 0)        // well after nonce
+		na := analyzeNonce(nonceTime, 1, cidTime, now)
 
 		if na.SessionAgeSecs != 0 {
 			t.Errorf("session_age_secs=%d, want 0", na.SessionAgeSecs)
@@ -213,7 +248,8 @@ func TestAnalyzeNonce(t *testing.T) {
 	t.Run("long session", func(t *testing.T) {
 		cidTime := time.Unix(1632679676, 0)
 		nonceTime := time.Unix(1632679676+7200, 0) // 2 hours later
-		na := analyzeNonce(nonceTime, 847, cidTime)
+		now := time.Unix(1700000000, 0)             // well after nonce
+		na := analyzeNonce(nonceTime, 847, cidTime, now)
 
 		if na.SessionAgeSecs != 7200 {
 			t.Errorf("session_age_secs=%d, want 7200", na.SessionAgeSecs)
@@ -231,9 +267,10 @@ func TestAnalyzeNonce(t *testing.T) {
 	})
 
 	t.Run("negative delta — nonce predates CID", func(t *testing.T) {
-		cidTime := time.Unix(1737000000, 0)  // 2025
+		cidTime := time.Unix(1737000000, 0)   // 2025
 		nonceTime := time.Unix(1632679676, 0) // 2021
-		na := analyzeNonce(nonceTime, 1, cidTime)
+		now := time.Unix(1737000000, 0)        // same as CID
+		na := analyzeNonce(nonceTime, 1, cidTime, now)
 
 		if na.SessionAgeSecs >= 0 {
 			t.Errorf("session_age_secs=%d, want negative", na.SessionAgeSecs)
@@ -255,7 +292,129 @@ func TestAnalyzeNonce(t *testing.T) {
 		if hasMatches {
 			t.Error("should NOT report 'nonce_timestamp matches cid_timestamp' when years apart")
 		}
+		if na.TimestampReliable {
+			t.Error("expected TimestampReliable=false for nonce that predates CID by years")
+		}
 		t.Logf("commentary: %v", na.Commentary)
+	})
+}
+
+func TestCrossReferenceClassifications(t *testing.T) {
+	t.Run("all v1.0.1 from same machine", func(t *testing.T) {
+		// 3 domains with same MachineID, all v1.0.1 with sequential timestamps
+		decoded := []*DecodedOAST{
+			{
+				Valid:     true,
+				MachineID: "aa:bb:cc",
+				Classification: &Classification{
+					ServerVersion: VersionV101,
+					Confidence:    "medium",
+					Reasoning:     []string{"initial reason"},
+					NonceAnalysis: &NonceAnalysis{
+						NonceTimestamp:    time.Unix(1632679676, 0),
+						TimestampReliable: true,
+					},
+				},
+			},
+			{
+				Valid:     true,
+				MachineID: "aa:bb:cc",
+				Classification: &Classification{
+					ServerVersion: VersionV101,
+					Confidence:    "medium",
+					Reasoning:     []string{"initial reason"},
+					NonceAnalysis: &NonceAnalysis{
+						NonceTimestamp:    time.Unix(1632679700, 0),
+						TimestampReliable: true,
+					},
+				},
+			},
+			{
+				Valid:     true,
+				MachineID: "aa:bb:cc",
+				Classification: &Classification{
+					ServerVersion: VersionV101,
+					Confidence:    "medium",
+					Reasoning:     []string{"initial reason"},
+					NonceAnalysis: &NonceAnalysis{
+						NonceTimestamp:    time.Unix(1632679800, 0),
+						TimestampReliable: true,
+					},
+				},
+			},
+		}
+
+		CrossReferenceClassifications(decoded)
+
+		for i, d := range decoded {
+			if d.Classification.Confidence != "high" {
+				t.Errorf("domain[%d] confidence=%q, want high (should be upgraded)", i, d.Classification.Confidence)
+			}
+			hasCorroboration := false
+			for _, r := range d.Classification.Reasoning {
+				if len(r) > 15 && r[:15] == "corroborated by" {
+					hasCorroboration = true
+				}
+			}
+			if !hasCorroboration {
+				t.Errorf("domain[%d] missing corroboration reasoning", i)
+			}
+		}
+	})
+
+	t.Run("mixed versions from same machine", func(t *testing.T) {
+		// 3 domains with same MachineID: 2 v1.0.1, 1 v1.0.2+
+		decoded := []*DecodedOAST{
+			{
+				Valid:     true,
+				MachineID: "dd:ee:ff",
+				Classification: &Classification{
+					ServerVersion: VersionV101,
+					Confidence:    "high",
+					Reasoning:     []string{"initial reason"},
+					NonceAnalysis: &NonceAnalysis{
+						NonceTimestamp:    time.Unix(1632679676, 0),
+						TimestampReliable: true,
+					},
+				},
+			},
+			{
+				Valid:     true,
+				MachineID: "dd:ee:ff",
+				Classification: &Classification{
+					ServerVersion: VersionV101,
+					Confidence:    "high",
+					Reasoning:     []string{"initial reason"},
+					NonceAnalysis: &NonceAnalysis{
+						NonceTimestamp:    time.Unix(1632679700, 0),
+						TimestampReliable: true,
+					},
+				},
+			},
+			{
+				Valid:     true,
+				MachineID: "dd:ee:ff",
+				Classification: &Classification{
+					ServerVersion: VersionV102Plus,
+					Confidence:    "medium",
+					Reasoning:     []string{"initial reason"},
+				},
+			},
+		}
+
+		CrossReferenceClassifications(decoded)
+
+		for i, d := range decoded {
+			hasWarning := false
+			for _, r := range d.Classification.Reasoning {
+				if len(r) > 15 && r[:15] == "mixed server ve" {
+					hasWarning = true
+				}
+			}
+			if !hasWarning {
+				t.Errorf("domain[%d] missing mixed-version warning reasoning", i)
+			}
+		}
 	})
 }
 

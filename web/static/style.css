@@ -176,6 +176,27 @@ select, button {
   margin-top: 0.25rem;
 }
 
+.download-bar {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.download-csv-btn, .download-report-btn {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.8125rem;
+  background: var(--bg-alt);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.download-csv-btn:hover, .download-report-btn:hover {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
 footer {
   margin-top: 2rem;
   padding-top: 1rem;

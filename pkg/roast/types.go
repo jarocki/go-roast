@@ -15,6 +15,8 @@ type DecodedOAST struct {
 	Valid          bool            `json:"valid"`                        // Whether decoding succeeded
 	Error          string          `json:"error,omitempty"`              // Error message if invalid
 	Classification *Classification `json:"classification,omitempty"`     // Client type and version classification
+	NonceTimestamp *time.Time      `json:"nonce_timestamp,omitempty"`    // Promoted from NonceAnalysis when reliable
+	NonceCounter   *uint32         `json:"nonce_counter,omitempty"`      // Promoted from NonceAnalysis when reliable
 }
 
 // OASTMatch represents an extracted OAST domain from text

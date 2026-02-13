@@ -535,6 +535,15 @@ go test -cover ./...
 - [MCP Specification](https://spec.modelcontextprotocol.io/)
 - [darses/cti](https://github.com/darses/cti) - Actively maintained lists of OAST domain infrastructure
 
+## Acknowledgements
+
+- **Bob Rudis** ([@hrbrmstr](https://github.com/hrbrmstr)) — Creator of the original
+  [roast](https://codeberg.org/hrbrmstr/go-roast) and
+  [roast-mcp](https://codeberg.org/hrbrmstr/roast-mcp) codebase. His work on OAST domain
+  decoding and MCP server integration forms the foundation of this project.
+- **Ian Campbell** — For collaboration and discussion on OAST domain analysis techniques,
+  discussed on Mastodon at the beginning of 2025.
+
 ## License
 
 MIT

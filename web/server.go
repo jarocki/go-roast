@@ -21,6 +21,7 @@ func Serve(addr string, port int) error {
 	mux.HandleFunc("POST /api/classify", handleClassify)
 	mux.HandleFunc("POST /api/extract", handleExtract)
 	mux.HandleFunc("POST /api/analyze", handleAnalyze)
+	mux.HandleFunc("POST /api/analyze/markdown", handleAnalyzeMarkdown)
 
 	// Static files
 	staticFS, err := fs.Sub(staticFiles, "static")

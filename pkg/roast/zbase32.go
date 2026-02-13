@@ -20,6 +20,37 @@ func zbase32Value(c byte) (int, bool) {
 	return 0, false
 }
 
+// zbase32Encode encodes bytes into a z-base-32 string.
+// Each output character represents 5 bits.
+func zbase32Encode(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+
+	var result []byte
+	var bitBuffer uint64
+	var bitCount int
+
+	for _, b := range data {
+		bitBuffer = (bitBuffer << 8) | uint64(b)
+		bitCount += 8
+
+		for bitCount >= 5 {
+			bitCount -= 5
+			idx := (bitBuffer >> bitCount) & 0x1F
+			result = append(result, zbase32Alphabet[idx])
+		}
+	}
+
+	// Handle remaining bits (pad with zeros on the right)
+	if bitCount > 0 {
+		idx := (bitBuffer << (5 - bitCount)) & 0x1F
+		result = append(result, zbase32Alphabet[idx])
+	}
+
+	return string(result)
+}
+
 // zbase32Decode decodes a z-base-32 encoded string into bytes.
 // Each character encodes 5 bits. Output length is floor(len(s)*5/8).
 func zbase32Decode(s string) ([]byte, error) {

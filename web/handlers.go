@@ -140,6 +140,24 @@ func handleAnalyze(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, analysis)
 }
 
+// POST /api/analyze/markdown — campaign analysis as markdown report
+func handleAnalyzeMarkdown(w http.ResponseWriter, r *http.Request) {
+	req, err := readRequest(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, apiError{Error: "invalid JSON: " + err.Error()})
+		return
+	}
+
+	if req.Input == "" {
+		writeJSON(w, http.StatusBadRequest, apiError{Error: "no input provided"})
+		return
+	}
+
+	analysis := roast.AnalyzeCampaignFromString(req.Input)
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.Write([]byte(analysis.FormatMarkdown()))
+}
+
 func splitLines(s string) []string {
 	var lines []string
 	for _, line := range strings.Split(s, "\n") {
