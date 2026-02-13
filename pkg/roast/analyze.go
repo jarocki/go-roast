@@ -9,35 +9,43 @@ import (
 
 // CampaignStats contains statistics for a specific campaign
 type CampaignStats struct {
-	CampaignID     string                   `json:"campaign_id"`
-	Count          int                      `json:"count"`
-	FirstSeen      time.Time                `json:"first_seen"`
-	LastSeen       time.Time                `json:"last_seen"`
-	MachineIDs     []string                 `json:"machine_ids"`
-	PIDs           []uint16                 `json:"pids"`
-	CounterMin     uint32                   `json:"counter_min"`
-	CounterMax     uint32                   `json:"counter_max"`
-	KSortValues    []string                 `json:"ksort_values"`
-	ClientTypes    map[ClientType]int       `json:"client_types,omitempty"`
-	ServerVersions map[ServerVersion]int    `json:"server_versions,omitempty"`
+	CampaignID       string                `json:"campaign_id"`
+	Count            int                   `json:"count"`
+	FirstSeen        time.Time             `json:"first_seen"`
+	LastSeen         time.Time             `json:"last_seen"`
+	MachineIDs       []string              `json:"machine_ids"`
+	PIDs             []uint16              `json:"pids"`
+	CounterMin       uint32                `json:"counter_min"`
+	CounterMax       uint32                `json:"counter_max"`
+	KSortValues      []string              `json:"ksort_values"`
+	ClientTypes      map[ClientType]int    `json:"client_types,omitempty"`
+	ServerVersions   map[ServerVersion]int `json:"server_versions,omitempty"`
+	NonceTimestampMin *time.Time           `json:"nonce_timestamp_min,omitempty"`
+	NonceTimestampMax *time.Time           `json:"nonce_timestamp_max,omitempty"`
+	NonceCounterMinV101 *uint32            `json:"nonce_counter_min_v101,omitempty"`
+	NonceCounterMaxV101 *uint32            `json:"nonce_counter_max_v101,omitempty"`
+	SessionAgeMinSecs *int64              `json:"session_age_min_secs,omitempty"`
+	SessionAgeMaxSecs *int64              `json:"session_age_max_secs,omitempty"`
 }
 
 // CampaignAnalysis contains the full analysis of OAST domains
 type CampaignAnalysis struct {
-	TotalDomains    int                      `json:"total_domains"`
-	ValidDomains    int                      `json:"valid_domains"`
-	InvalidDomains  int                      `json:"invalid_domains"`
-	UniqueCampaigns int                      `json:"unique_campaigns"`
-	FirstSeen       time.Time                `json:"first_seen,omitempty"`
-	LastSeen        time.Time                `json:"last_seen,omitempty"`
-	TimeSpan        string                   `json:"time_span,omitempty"`
-	UniqueMachines  int                      `json:"unique_machines"`
-	UniquePIDs      int                      `json:"unique_pids"`
-	MachineIDs      []string                 `json:"machine_ids"`
-	PIDs            []uint16                 `json:"pids"`
-	Campaigns       map[string]*CampaignStats `json:"campaigns"`
-	ClientTypes     map[ClientType]int        `json:"client_types,omitempty"`
-	ServerVersions  map[ServerVersion]int     `json:"server_versions,omitempty"`
+	TotalDomains     int                       `json:"total_domains"`
+	ValidDomains     int                       `json:"valid_domains"`
+	InvalidDomains   int                       `json:"invalid_domains"`
+	UniqueCampaigns  int                       `json:"unique_campaigns"`
+	FirstSeen        time.Time                 `json:"first_seen,omitempty"`
+	LastSeen         time.Time                 `json:"last_seen,omitempty"`
+	TimeSpan         string                    `json:"time_span,omitempty"`
+	UniqueMachines   int                       `json:"unique_machines"`
+	UniquePIDs       int                       `json:"unique_pids"`
+	MachineIDs       []string                  `json:"machine_ids"`
+	PIDs             []uint16                  `json:"pids"`
+	Campaigns        map[string]*CampaignStats `json:"campaigns"`
+	ClientTypes      map[ClientType]int        `json:"client_types,omitempty"`
+	ServerVersions   map[ServerVersion]int     `json:"server_versions,omitempty"`
+	ExecutiveSummary string                    `json:"executive_summary,omitempty"`
+	CrossRefFindings []string                  `json:"cross_ref_findings,omitempty"`
 }
 
 // AnalyzeCampaignFromFile analyzes OAST domains from a file and returns campaign statistics
@@ -145,6 +153,32 @@ func analyzeCampaign(matches []OASTMatch, decoded []*DecodedOAST) *CampaignAnaly
 		if d.Counter > stats.CounterMax {
 			stats.CounterMax = d.Counter
 		}
+
+		// Aggregate nonce analytics from NonceAnalysis
+		if d.Classification != nil && d.Classification.NonceAnalysis != nil {
+			na := d.Classification.NonceAnalysis
+			nts := na.NonceTimestamp
+			if stats.NonceTimestampMin == nil || nts.Before(*stats.NonceTimestampMin) {
+				stats.NonceTimestampMin = &nts
+			}
+			if stats.NonceTimestampMax == nil || nts.After(*stats.NonceTimestampMax) {
+				stats.NonceTimestampMax = &nts
+			}
+			nctr := na.NonceCounter
+			if stats.NonceCounterMinV101 == nil || nctr < *stats.NonceCounterMinV101 {
+				stats.NonceCounterMinV101 = &nctr
+			}
+			if stats.NonceCounterMaxV101 == nil || nctr > *stats.NonceCounterMaxV101 {
+				stats.NonceCounterMaxV101 = &nctr
+			}
+			age := na.SessionAgeSecs
+			if stats.SessionAgeMinSecs == nil || age < *stats.SessionAgeMinSecs {
+				stats.SessionAgeMinSecs = &age
+			}
+			if stats.SessionAgeMaxSecs == nil || age > *stats.SessionAgeMaxSecs {
+				stats.SessionAgeMaxSecs = &age
+			}
+		}
 	}
 
 	// Convert sets to sorted slices
@@ -172,17 +206,120 @@ func analyzeCampaign(matches []OASTMatch, decoded []*DecodedOAST) *CampaignAnaly
 		analysis.TimeSpan = formatDuration(duration)
 	}
 
+	// Cross-reference classifications
+	CrossReferenceClassifications(decoded)
+
+	// Generate executive summary
+	analysis.ExecutiveSummary = generateExecutiveSummary(analysis)
+
 	return analysis
 }
 
-// FormatMarkdown returns a nicely formatted markdown report
+// CrossReferenceClassifications cross-validates v1.0.1 classifications across domains
+// sharing the same MachineID. Groups with consistent v1.0.1 timestamps get upgraded
+// confidence; groups with mixed versions get a warning.
+func CrossReferenceClassifications(decoded []*DecodedOAST) {
+	// Group valid domains by MachineID
+	groups := make(map[string][]*DecodedOAST)
+	for _, d := range decoded {
+		if d.Valid && d.MachineID != "" {
+			groups[d.MachineID] = append(groups[d.MachineID], d)
+		}
+	}
+
+	for _, group := range groups {
+		if len(group) < 2 {
+			continue
+		}
+
+		v101Count := 0
+		var v101Domains []*DecodedOAST
+		for _, d := range group {
+			if d.Classification != nil && d.Classification.ServerVersion == VersionV101 && d.Classification.NonceAnalysis != nil && d.Classification.NonceAnalysis.TimestampReliable {
+				v101Count++
+				v101Domains = append(v101Domains, d)
+			}
+		}
+
+		if v101Count == len(group) && v101Count >= 2 {
+			// Check if timestamps are monotonically increasing
+			sorted := make([]*DecodedOAST, len(v101Domains))
+			copy(sorted, v101Domains)
+			sort.Slice(sorted, func(i, j int) bool {
+				return sorted[i].Classification.NonceAnalysis.NonceTimestamp.Before(sorted[j].Classification.NonceAnalysis.NonceTimestamp)
+			})
+
+			monotonic := true
+			for i := 1; i < len(sorted); i++ {
+				if !sorted[i].Classification.NonceAnalysis.NonceTimestamp.After(sorted[i-1].Classification.NonceAnalysis.NonceTimestamp) &&
+					sorted[i].Classification.NonceAnalysis.NonceTimestamp != sorted[i-1].Classification.NonceAnalysis.NonceTimestamp {
+					monotonic = false
+					break
+				}
+			}
+
+			if monotonic {
+				reason := fmt.Sprintf("corroborated by %d sibling domains from same machine", len(group))
+				for _, d := range group {
+					if d.Classification != nil && d.Classification.Confidence == "medium" {
+						d.Classification.Confidence = "high"
+						d.Classification.Reasoning = append(d.Classification.Reasoning, reason)
+					}
+				}
+			}
+		} else if v101Count > 0 && v101Count < len(group) {
+			// Mixed versions from same machine
+			reason := "mixed server versions from same machine ID — some classifications may be unreliable"
+			for _, d := range group {
+				if d.Classification != nil {
+					d.Classification.Reasoning = append(d.Classification.Reasoning, reason)
+				}
+			}
+		}
+	}
+}
+
+// generateExecutiveSummary creates a concise narrative summary of the analysis.
+func generateExecutiveSummary(a *CampaignAnalysis) string {
+	var parts []string
+
+	parts = append(parts, fmt.Sprintf("Analysis of %d domains across %d campaigns", a.TotalDomains, a.UniqueCampaigns))
+
+	if a.TimeSpan != "" {
+		parts[0] += fmt.Sprintf(" spanning %s", a.TimeSpan)
+	}
+	parts[0] += "."
+
+	parts = append(parts, fmt.Sprintf("Found %d machine IDs and %d PIDs.", a.UniqueMachines, a.UniquePIDs))
+
+	// Classification breakdown
+	var classificationParts []string
+	for sv, count := range a.ServerVersions {
+		classificationParts = append(classificationParts, fmt.Sprintf("%s (%d)", sv, count))
+	}
+	if len(classificationParts) > 0 {
+		sort.Strings(classificationParts)
+		parts = append(parts, "Classification: "+strings.Join(classificationParts, ", ")+".")
+	}
+
+	return strings.Join(parts, " ")
+}
+
+// FormatMarkdown returns a nicely formatted markdown report with executive summary,
+// session analytics, cross-reference findings, and per-campaign narratives.
 func (a *CampaignAnalysis) FormatMarkdown() string {
 	var sb strings.Builder
 
 	sb.WriteString("# OAST Campaign Analysis\n\n")
 
+	// Executive Summary
+	if a.ExecutiveSummary != "" {
+		sb.WriteString("## Executive Summary\n\n")
+		sb.WriteString(a.ExecutiveSummary + "\n")
+	}
+
 	// Overall statistics
-	sb.WriteString("## Overall Statistics\n\n")
+	sb.WriteString("\n## Overall Statistics\n\n")
 	sb.WriteString(fmt.Sprintf("- **Total Domains Found:** %d\n", a.TotalDomains))
 	sb.WriteString(fmt.Sprintf("- **Valid Domains:** %d\n", a.ValidDomains))
 	if a.InvalidDomains > 0 {
@@ -198,7 +335,7 @@ func (a *CampaignAnalysis) FormatMarkdown() string {
 		sb.WriteString(fmt.Sprintf("- **Time Span:** %s\n", a.TimeSpan))
 	}
 
-	// Classification summary
+	// Classification summary with per-campaign breakdown
 	if len(a.ClientTypes) > 0 {
 		sb.WriteString("\n## Classification\n\n")
 		sb.WriteString("**Client Types:** ")
@@ -207,7 +344,7 @@ func (a *CampaignAnalysis) FormatMarkdown() string {
 			ctParts = append(ctParts, fmt.Sprintf("%s (%d)", ct, count))
 		}
 		sort.Strings(ctParts)
-		sb.WriteString(strings.Join(ctParts, ", ") + "\n")
+		sb.WriteString(strings.Join(ctParts, ", ") + "\n\n")
 
 		sb.WriteString("**Server Versions:** ")
 		var svParts []string
@@ -216,6 +353,66 @@ func (a *CampaignAnalysis) FormatMarkdown() string {
 		}
 		sort.Strings(svParts)
 		sb.WriteString(strings.Join(svParts, ", ") + "\n")
+
+		// Per-campaign classification breakdown
+		if len(a.Campaigns) > 1 {
+			sb.WriteString("\n**Per-Campaign Breakdown:**\n")
+			for cid, stats := range a.Campaigns {
+				var parts []string
+				for sv, count := range stats.ServerVersions {
+					parts = append(parts, fmt.Sprintf("%s=%d", sv, count))
+				}
+				sort.Strings(parts)
+				sb.WriteString(fmt.Sprintf("- `%s`: %s\n", cid, strings.Join(parts, ", ")))
+			}
+		}
+	}
+
+	// Session Analytics — when v1.0.1 nonces present
+	hasSessionAnalytics := false
+	for _, stats := range a.Campaigns {
+		if stats.NonceTimestampMin != nil {
+			hasSessionAnalytics = true
+			break
+		}
+	}
+	if hasSessionAnalytics {
+		sb.WriteString("\n## Session Analytics\n\n")
+		sb.WriteString("v1.0.1 nonce-derived session data:\n\n")
+		for cid, stats := range a.Campaigns {
+			if stats.NonceTimestampMin == nil {
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("**Campaign `%s`:**\n", cid))
+			if stats.NonceTimestampMin != nil && stats.NonceTimestampMax != nil {
+				sb.WriteString(fmt.Sprintf("- Nonce Timestamp Range: %s to %s\n",
+					stats.NonceTimestampMin.Format(time.RFC3339),
+					stats.NonceTimestampMax.Format(time.RFC3339)))
+			}
+			if stats.SessionAgeMinSecs != nil && stats.SessionAgeMaxSecs != nil {
+				sb.WriteString(fmt.Sprintf("- Session Age Range: %ds to %ds\n", *stats.SessionAgeMinSecs, *stats.SessionAgeMaxSecs))
+			}
+			if stats.NonceCounterMinV101 != nil && stats.NonceCounterMaxV101 != nil {
+				sb.WriteString(fmt.Sprintf("- Domain Counter Range (v1.0.1): %d to %d\n", *stats.NonceCounterMinV101, *stats.NonceCounterMaxV101))
+			}
+			// Velocity calculation
+			if stats.NonceTimestampMin != nil && stats.NonceTimestampMax != nil {
+				nonceDuration := stats.NonceTimestampMax.Sub(*stats.NonceTimestampMin)
+				if nonceDuration > 0 && stats.Count > 1 {
+					velocity := float64(stats.Count) / nonceDuration.Hours()
+					sb.WriteString(fmt.Sprintf("- Domain Generation Velocity: %.1f domains/hour\n", velocity))
+				}
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	// Cross-Reference Findings
+	if len(a.CrossRefFindings) > 0 {
+		sb.WriteString("\n## Cross-Reference Findings\n\n")
+		for _, finding := range a.CrossRefFindings {
+			sb.WriteString(fmt.Sprintf("- %s\n", finding))
+		}
 	}
 
 	// Machine IDs
@@ -260,6 +457,21 @@ func (a *CampaignAnalysis) FormatMarkdown() string {
 
 			sb.WriteString(fmt.Sprintf("- **Counter Range:** %d - %d\n", stats.CounterMin, stats.CounterMax))
 
+			// Nonce timestamp and counter ranges
+			if stats.NonceTimestampMin != nil && stats.NonceTimestampMax != nil {
+				sb.WriteString(fmt.Sprintf("- **Nonce Timestamp Range:** %s to %s\n",
+					stats.NonceTimestampMin.Format(time.RFC3339),
+					stats.NonceTimestampMax.Format(time.RFC3339)))
+			}
+			if stats.NonceCounterMinV101 != nil && stats.NonceCounterMaxV101 != nil {
+				sb.WriteString(fmt.Sprintf("- **Nonce Counter Range (v1.0.1):** %d - %d\n",
+					*stats.NonceCounterMinV101, *stats.NonceCounterMaxV101))
+			}
+			if stats.SessionAgeMinSecs != nil && stats.SessionAgeMaxSecs != nil {
+				sb.WriteString(fmt.Sprintf("- **Session Age Range:** %ds - %ds\n",
+					*stats.SessionAgeMinSecs, *stats.SessionAgeMaxSecs))
+			}
+
 			if len(stats.MachineIDs) > 0 {
 				sb.WriteString(fmt.Sprintf("- **Machine IDs (%d):** ", len(stats.MachineIDs)))
 				machineStrs := make([]string, len(stats.MachineIDs))
@@ -288,8 +500,22 @@ func (a *CampaignAnalysis) FormatMarkdown() string {
 				sb.WriteString(strings.Join(ksortStrs, ", ") + "\n")
 			}
 
-			sb.WriteString("\n")
+			// Campaign narrative
+			narrative := fmt.Sprintf("Campaign %s was active for %s across %d machines, generating %d domains.",
+				stats.CampaignID, formatDuration(duration), len(stats.MachineIDs), stats.Count)
+			sb.WriteString(fmt.Sprintf("\n%s\n\n", narrative))
 		}
+	}
+
+	// Timeline section
+	if !a.FirstSeen.IsZero() && a.ValidDomains > 0 {
+		sb.WriteString("## Timeline\n\n")
+		sb.WriteString(fmt.Sprintf("Activity observed from %s to %s (%s).\n",
+			a.FirstSeen.Format(time.RFC3339),
+			a.LastSeen.Format(time.RFC3339),
+			a.TimeSpan))
+		sb.WriteString(fmt.Sprintf("%d domains decoded across %d campaigns from %d unique machines.\n",
+			a.ValidDomains, a.UniqueCampaigns, a.UniqueMachines))
 	}
 
 	return sb.String()

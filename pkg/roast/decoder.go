@@ -91,16 +91,25 @@ func Decode(input string) (*DecodedOAST, error) {
 	// Classify after successful CLI decode, using decoded CID timestamp for nonce analysis
 	result.Classification = ClassifyDomain(subdomain, result.Timestamp)
 
+	// Promote reliable nonce fields to top-level for easier consumption
+	if result.Classification != nil && result.Classification.NonceAnalysis != nil && result.Classification.NonceAnalysis.TimestampReliable {
+		ts := result.Classification.NonceAnalysis.NonceTimestamp
+		result.NonceTimestamp = &ts
+		ctr := result.Classification.NonceAnalysis.NonceCounter
+		result.NonceCounter = &ctr
+	}
+
 	return result, nil
 }
 
-// DecodeBatch decodes multiple OAST domains
+// DecodeBatch decodes multiple OAST domains and cross-references classifications.
 func DecodeBatch(inputs []string) []*DecodedOAST {
 	results := make([]*DecodedOAST, len(inputs))
 	for i, input := range inputs {
 		result, _ := Decode(input)
 		results[i] = result
 	}
+	CrossReferenceClassifications(results)
 	return results
 }
 

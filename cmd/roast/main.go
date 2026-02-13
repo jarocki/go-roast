@@ -394,7 +394,8 @@ func outputCSV(results []*roast.DecodedOAST) error {
 
 	if err := w.Write([]string{
 		"Original", "Valid", "Timestamp", "MachineID", "PID", "Counter",
-		"KSort", "Campaign", "Nonce", "ClientType", "ServerVersion", "Decodable", "Confidence", "Error",
+		"KSort", "Campaign", "Nonce", "ClientType", "ServerVersion", "Decodable", "Confidence",
+		"NonceTimestamp", "NonceCounter", "Error",
 	}); err != nil {
 		return err
 	}
@@ -406,6 +407,14 @@ func outputCSV(results []*roast.DecodedOAST) error {
 			serverVersion = string(r.Classification.ServerVersion)
 			decodable = fmt.Sprintf("%t", r.Classification.Decodable)
 			confidence = r.Classification.Confidence
+		}
+
+		nonceTs, nonceCtr := "", ""
+		if r.NonceTimestamp != nil {
+			nonceTs = r.NonceTimestamp.Format("2006-01-02 15:04:05")
+		}
+		if r.NonceCounter != nil {
+			nonceCtr = fmt.Sprintf("%d", *r.NonceCounter)
 		}
 
 		if err := w.Write([]string{
@@ -422,6 +431,8 @@ func outputCSV(results []*roast.DecodedOAST) error {
 			serverVersion,
 			decodable,
 			confidence,
+			nonceTs,
+			nonceCtr,
 			r.Error,
 		}); err != nil {
 			return err
@@ -453,11 +464,17 @@ func outputTable(results []*roast.DecodedOAST) error {
 			clientType = string(r.Classification.ClientType)
 			version = string(r.Classification.ServerVersion)
 			conf = r.Classification.Confidence
-			if r.Classification.NonceAnalysis != nil {
-				na := r.Classification.NonceAnalysis
-				nonceTs = na.NonceTimestamp.Format("2006-01-02 15:04:05")
-				nonceCtr = fmt.Sprintf("%d", na.NonceCounter)
-			}
+		}
+		// Prefer top-level promoted fields, fall back to NonceAnalysis
+		if r.NonceTimestamp != nil {
+			nonceTs = r.NonceTimestamp.Format("2006-01-02 15:04:05")
+		} else if r.Classification != nil && r.Classification.NonceAnalysis != nil {
+			nonceTs = r.Classification.NonceAnalysis.NonceTimestamp.Format("2006-01-02 15:04:05")
+		}
+		if r.NonceCounter != nil {
+			nonceCtr = fmt.Sprintf("%d", *r.NonceCounter)
+		} else if r.Classification != nil && r.Classification.NonceAnalysis != nil {
+			nonceCtr = fmt.Sprintf("%d", r.Classification.NonceAnalysis.NonceCounter)
 		}
 
 		fmt.Printf("%-40s %-6s %-20s %-12s %-7d %-10d %-8s %-8s %-8s %-20s %-13s\n",

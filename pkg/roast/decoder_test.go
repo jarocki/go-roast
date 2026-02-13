@@ -34,6 +34,17 @@ func TestDecode(t *testing.T) {
 				if d.Nonce != "cfemp9yyyyyyn" {
 					t.Errorf("Nonce = %q, want %q", d.Nonce, "cfemp9yyyyyyn")
 				}
+				// Promoted nonce fields should be populated for reliable v1.0.1 nonces
+				if d.NonceTimestamp == nil {
+					t.Error("NonceTimestamp should be populated for v1.0.1 domain")
+				} else if d.NonceTimestamp.Year() != 2021 {
+					t.Errorf("NonceTimestamp year=%d, want 2021", d.NonceTimestamp.Year())
+				}
+				if d.NonceCounter == nil {
+					t.Error("NonceCounter should be populated for v1.0.1 domain")
+				} else if *d.NonceCounter != 1 {
+					t.Errorf("NonceCounter=%d, want 1", *d.NonceCounter)
+				}
 			},
 		},
 		{

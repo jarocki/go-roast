@@ -1,6 +1,7 @@
 // app.js — vanilla JS client for roast web UI.
 // No external dependencies. Handles tab switching, file upload/drag-drop,
-// API calls, and result rendering with classification badges.
+// API calls, result rendering with classification badges, CSV export,
+// and markdown report download.
 //
 // @decision: Vanilla JS over a framework because the UI is a single page with
 // ~4 interactions. A framework would add build complexity for negligible benefit.
@@ -18,6 +19,10 @@
   const fileInput = document.getElementById('file-input');
   const tabs = document.querySelectorAll('.tab');
   const tabContents = document.querySelectorAll('.tab-content');
+
+  // Last result storage for CSV export
+  let lastResultData = null;
+  let lastResultAction = null;
 
   // Tab switching
   tabs.forEach(tab => {
@@ -124,6 +129,8 @@
 
   function renderResults(action, data) {
     resultsSection.hidden = false;
+    lastResultData = data;
+    lastResultAction = action;
 
     switch (action) {
       case 'decode':
@@ -141,11 +148,40 @@
     }
   }
 
+  // Download bar with Save CSV (and optionally Download Report) buttons
+  function renderDownloadBar(action) {
+    let html = '<div class="download-bar">';
+    html += '<button class="download-csv-btn" onclick="return false;">Save CSV</button>';
+    if (action === 'analyze') {
+      html += ' <button class="download-report-btn" onclick="return false;">Download Report</button>';
+    }
+    html += '</div>';
+
+    const bar = document.createElement('div');
+    bar.innerHTML = html;
+    resultsContainer.innerHTML = '';
+    resultsContainer.appendChild(bar.firstChild);
+
+    // Wire up CSV button
+    const csvBtn = resultsContainer.querySelector('.download-csv-btn');
+    if (csvBtn) {
+      csvBtn.addEventListener('click', function() { downloadCSV(action); });
+    }
+
+    // Wire up Report button for analyze
+    const reportBtn = resultsContainer.querySelector('.download-report-btn');
+    if (reportBtn) {
+      reportBtn.addEventListener('click', function() { downloadMarkdownReport(); });
+    }
+  }
+
   function renderDecodeResults(results) {
     if (!Array.isArray(results) || results.length === 0) {
       resultsContainer.innerHTML = '<p>No results</p>';
       return;
     }
+
+    renderDownloadBar('decode');
 
     let html = '<table class="results-table"><thead><tr>';
     html += '<th>Original</th><th>Valid</th><th>Client</th><th>Version</th>';
@@ -183,7 +219,7 @@
     }
 
     html += '</tbody></table>';
-    resultsContainer.innerHTML = html;
+    resultsContainer.insertAdjacentHTML('beforeend', html);
   }
 
   function renderClassifyResults(results) {
@@ -191,6 +227,8 @@
       resultsContainer.innerHTML = '<p>No results</p>';
       return;
     }
+
+    renderDownloadBar('classify');
 
     let html = '<table class="results-table"><thead><tr>';
     html += '<th>Domain</th><th>Client</th><th>Version</th><th>Confidence</th>';
@@ -210,7 +248,7 @@
     }
 
     html += '</tbody></table>';
-    resultsContainer.innerHTML = html;
+    resultsContainer.insertAdjacentHTML('beforeend', html);
   }
 
   function renderExtractResults(data) {
@@ -219,11 +257,21 @@
       resultsContainer.innerHTML = '<p>No OAST domains found in text</p>';
       return;
     }
+    // Store decoded for CSV export
+    lastResultData = decoded;
+    lastResultAction = 'extract';
     renderDecodeResults(decoded);
   }
 
   function renderAnalyzeResults(data) {
+    renderDownloadBar('analyze');
+
     let html = '<div class="analysis-report">';
+
+    if (data.executive_summary) {
+      html += '<strong>Summary:</strong> ' + escapeHtml(data.executive_summary) + '<br><br>';
+    }
+
     html += '<strong>Total Domains:</strong> ' + data.total_domains + '<br>';
     html += '<strong>Valid:</strong> ' + data.valid_domains;
     if (data.invalid_domains > 0) html += ' | <strong>Invalid:</strong> ' + data.invalid_domains;
@@ -248,6 +296,14 @@
       html += '<br>';
     }
 
+    // Cross-reference findings
+    if (data.cross_ref_findings && data.cross_ref_findings.length > 0) {
+      html += '<br><strong>Cross-Reference Findings:</strong><br>';
+      data.cross_ref_findings.forEach(function(f) {
+        html += '- ' + escapeHtml(f) + '<br>';
+      });
+    }
+
     // Campaign details
     if (data.campaigns) {
       for (const [id, stats] of Object.entries(data.campaigns)) {
@@ -259,7 +315,119 @@
     }
 
     html += '</div>';
-    resultsContainer.innerHTML = html;
+    resultsContainer.insertAdjacentHTML('beforeend', html);
+  }
+
+  // CSV generation and download
+  function downloadCSV(action) {
+    if (!lastResultData) return;
+
+    let csv = '';
+    const data = lastResultData;
+
+    if (action === 'decode' || action === 'extract') {
+      const results = Array.isArray(data) ? data : (data.decoded || []);
+      const headers = ['Original', 'Valid', 'Timestamp', 'MachineID', 'PID', 'Counter',
+        'KSort', 'Campaign', 'Nonce', 'ClientType', 'ServerVersion', 'Decodable',
+        'Confidence', 'NonceTimestamp', 'NonceCounter', 'Error'];
+      csv = headers.join(',') + '\n';
+      for (const r of results) {
+        const c = r.classification || {};
+        const row = [
+          csvEscape(r.original || ''),
+          r.valid ? 'true' : 'false',
+          r.valid ? formatTimestamp(r.timestamp) : '',
+          csvEscape(r.machine_id || ''),
+          r.pid || '',
+          r.counter || '',
+          csvEscape(r.ksort || ''),
+          csvEscape(r.campaign || ''),
+          csvEscape(r.nonce || ''),
+          c.client_type || '',
+          c.server_version || '',
+          c.decodable ? 'true' : 'false',
+          c.confidence || '',
+          r.nonce_timestamp ? formatTimestamp(r.nonce_timestamp) : '',
+          r.nonce_counter != null ? r.nonce_counter : '',
+          csvEscape(r.error || '')
+        ];
+        csv += row.join(',') + '\n';
+      }
+    } else if (action === 'classify') {
+      const headers = ['Domain', 'ClientType', 'ServerVersion', 'Confidence', 'Decodable', 'Reasoning'];
+      csv = headers.join(',') + '\n';
+      for (const r of data) {
+        const c = r.classification || {};
+        const row = [
+          csvEscape(r.domain || ''),
+          c.client_type || '',
+          c.server_version || '',
+          c.confidence || '',
+          c.decodable ? 'true' : 'false',
+          csvEscape((c.reasoning || []).join('; '))
+        ];
+        csv += row.join(',') + '\n';
+      }
+    } else if (action === 'analyze') {
+      const headers = ['Metric', 'Value'];
+      csv = headers.join(',') + '\n';
+      csv += 'TotalDomains,' + data.total_domains + '\n';
+      csv += 'ValidDomains,' + data.valid_domains + '\n';
+      csv += 'InvalidDomains,' + data.invalid_domains + '\n';
+      csv += 'UniqueCampaigns,' + data.unique_campaigns + '\n';
+      csv += 'UniqueMachines,' + data.unique_machines + '\n';
+      csv += 'UniquePIDs,' + data.unique_pids + '\n';
+      if (data.time_span) csv += 'TimeSpan,' + csvEscape(data.time_span) + '\n';
+      if (data.executive_summary) csv += 'ExecutiveSummary,' + csvEscape(data.executive_summary) + '\n';
+    }
+
+    triggerDownload(csv, 'text/csv', 'roast-' + action + '.csv');
+  }
+
+  // Markdown report download (analyze only)
+  async function downloadMarkdownReport() {
+    const input = domainInput.value.trim();
+    if (!input) return;
+
+    try {
+      const resp = await fetch('/api/analyze/markdown', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ input: input })
+      });
+
+      if (!resp.ok) {
+        const err = await resp.json();
+        showError(err.error || 'Failed to generate report');
+        return;
+      }
+
+      const markdown = await resp.text();
+      triggerDownload(markdown, 'text/markdown', 'roast-report.md');
+    } catch (err) {
+      showError('Network error: ' + err.message);
+    }
+  }
+
+  function triggerDownload(content, mimeType, filename) {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function csvEscape(s) {
+    if (!s) return '';
+    s = String(s);
+    if (s.indexOf(',') >= 0 || s.indexOf('"') >= 0 || s.indexOf('\n') >= 0) {
+      return '"' + s.replace(/"/g, '""') + '"';
+    }
+    return s;
   }
 
   // Helpers
