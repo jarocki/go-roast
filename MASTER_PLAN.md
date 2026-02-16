@@ -2,7 +2,7 @@
 
 ## Original Intent
 
-Enhance go-roast with classification capabilities, web UI, and timezone-based attribution. Phase 1 adds client/version detection and web interface. Phase 2 adds passive timezone attribution from timestamp deltas.
+Enhance go-roast with classification capabilities, web UI, and advanced forensic attribution analytics. Phase 1 adds client/version detection and web interface. Phase 2 adds passive timezone attribution from timestamp deltas. Phase 3 adds machine clustering, counter gap analysis, and PID lifecycle tracking. Phase 4 adds temporal pattern analysis, enrichment data model, and attribution profile synthesis.
 
 ## Phase 1: Classification + Web Interface
 
@@ -51,3 +51,51 @@ Add passive timezone attribution by comparing XID timestamps (client local time)
   - Status: accepted
   - Rationale: XID timestamps encode client local time, DNS logs are UTC. The delta reveals timezone offset as a passive attribution signal.
   - Location: `pkg/roast/timezone.go`
+
+## Phase 3: 2nd Order Analytics
+
+Machine clustering, counter gap analysis, and PID lifecycle tracking. Groups decoded domains by machine_id for cross-campaign correlation, detects missing domains via counter sequence gaps, and tracks process lifecycles for behavioral profiling.
+
+**Status:** completed
+
+### Implementation Summary
+
+- Machine ID clustering with cross-campaign correlation (`pkg/roast/cluster.go`)
+- Counter gap analysis for missing domain detection (`pkg/roast/gaps.go`)
+- PID lifecycle tracking for process restart detection (`pkg/roast/lifecycle.go`)
+- CLI: `roast analyze --cluster` flag (default enabled)
+- MCP: `oast_cluster_machines` tool
+- Markdown report: Machine Clustering, PID Lifecycle Analysis, Counter Gap Analysis sections
+- MarkdownOptions struct for toggling 2nd order analytics sections
+
+### Decision Log
+
+- **DEC-CLUSTER-001**: Machine ID Clustering
+  - Status: accepted
+  - Rationale: Group decoded domains by machine_id to reveal distinct hosts, activity timelines, velocity, and cross-campaign correlation.
+  - Location: `pkg/roast/cluster.go`
+- **DEC-GAPS-001**: Counter Gap Analysis
+  - Status: accepted
+  - Rationale: Sequential counter in OAST domains enables detection of missing/uncaptured domains via gap analysis. Gaps >100 flagged as suspicious.
+  - Location: `pkg/roast/gaps.go`
+- **DEC-LIFECYCLE-001**: PID Lifecycle Tracking
+  - Status: accepted
+  - Rationale: Process ID combined with machine_id and counter ranges reveals process restart patterns and session boundaries for behavioral profiling.
+  - Location: `pkg/roast/lifecycle.go`
+
+## Phase 4: 3rd Order Analytics
+
+Temporal pattern analysis, MCP enrichment data model, and attribution profile synthesis. Detects automated vs manual behavior, defines enrichment schema for GreyNoise/JA4/KEV integration, and synthesizes all signals into forensic narratives.
+
+**Status:** planned
+
+### Key Deliverables
+
+- `pkg/roast/temporal.go` — Temporal pattern analysis (automated detection, work-hours)
+- `pkg/roast/enrich.go` — Enrichment data model (GreyNoise, JA4, KEV)
+- `pkg/roast/attribution.go` — Attribution profile synthesis (forensic narratives)
+- MCP: `oast_enrich_ip`, `oast_attribution_profile` tools
+
+### Decision Log
+
+_(pending implementation)_
