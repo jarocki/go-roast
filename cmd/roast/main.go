@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"codeberg.org/hrbrmstr/go-roast/mcp"
 	"codeberg.org/hrbrmstr/go-roast/pkg/roast"
@@ -45,6 +46,7 @@ func main() {
 
 func decodeCmd() *cobra.Command {
 	var fileFlag string
+	var logTimeFlag string
 
 	cmd := &cobra.Command{
 		Use:   "decode",
@@ -87,13 +89,39 @@ func decodeCmd() *cobra.Command {
 				return fmt.Errorf("no input provided")
 			}
 
-			results := roast.DecodeBatch(inputs)
+			var results []*roast.DecodedOAST
+
+			// If log-time is provided, decode with timezone estimation
+			if logTimeFlag != "" {
+				logTime, err := parseRFC3339(logTimeFlag)
+				if err != nil {
+					return fmt.Errorf("invalid log-time format (use RFC3339): %w", err)
+				}
+				// For single input with log time
+				if len(inputs) == 1 {
+					result, err := roast.DecodeWithLogTime(inputs[0], logTime)
+					if err != nil {
+						results = []*roast.DecodedOAST{result}
+					} else {
+						results = []*roast.DecodedOAST{result}
+					}
+				} else {
+					// For multiple inputs, use same log time for all
+					for _, input := range inputs {
+						result, _ := roast.DecodeWithLogTime(input, logTime)
+						results = append(results, result)
+					}
+				}
+			} else {
+				results = roast.DecodeBatch(inputs)
+			}
 
 			return outputResults(results, outputFlag)
 		},
 	}
 
 	cmd.Flags().StringVarP(&fileFlag, "file", "f", "", "File containing OAST domains (one per line)")
+	cmd.Flags().StringVar(&logTimeFlag, "log-time", "", "UTC log timestamp (RFC3339 format) for timezone estimation")
 
 	return cmd
 }
@@ -150,6 +178,7 @@ func extractCmd() *cobra.Command {
 func analyzeCmd() *cobra.Command {
 	var fileFlag string
 	var includeJSON bool
+	var timestampsFlag bool
 
 	cmd := &cobra.Command{
 		Use:   "analyze",
@@ -159,18 +188,38 @@ func analyzeCmd() *cobra.Command {
 			var analysis *roast.CampaignAnalysis
 			var err error
 
-			if fileFlag != "" {
-				analysis, err = roast.AnalyzeCampaignFromFile(fileFlag)
-			} else {
-				content, err := readFromStdin()
-				if err != nil {
-					return fmt.Errorf("failed to read stdin: %w", err)
-				}
-				analysis = roast.AnalyzeCampaignFromString(content)
-			}
+			// If --timestamps is provided, parse CSV/TSV with log_timestamp,domain format
+			if timestampsFlag {
+				var pairs []roast.TimestampedDomain
 
-			if err != nil {
-				return fmt.Errorf("analysis failed: %w", err)
+				if fileFlag != "" {
+					pairs, err = parseTimestampedFile(fileFlag)
+					if err != nil {
+						return fmt.Errorf("failed to parse timestamped file: %w", err)
+					}
+				} else {
+					pairs, err = parseTimestampedStdin()
+					if err != nil {
+						return fmt.Errorf("failed to parse timestamped input: %w", err)
+					}
+				}
+
+				analysis = roast.AnalyzeCampaignWithTimestamps(pairs)
+			} else {
+				// Standard analysis without timestamps
+				if fileFlag != "" {
+					analysis, err = roast.AnalyzeCampaignFromFile(fileFlag)
+				} else {
+					content, err := readFromStdin()
+					if err != nil {
+						return fmt.Errorf("failed to read stdin: %w", err)
+					}
+					analysis = roast.AnalyzeCampaignFromString(content)
+				}
+
+				if err != nil {
+					return fmt.Errorf("analysis failed: %w", err)
+				}
 			}
 
 			return outputAnalysis(analysis, outputFlag, includeJSON)
@@ -179,6 +228,7 @@ func analyzeCmd() *cobra.Command {
 
 	cmd.Flags().StringVarP(&fileFlag, "file", "f", "", "File to analyze (if not provided, reads from stdin)")
 	cmd.Flags().BoolVar(&includeJSON, "include-json", false, "Include raw JSON data in markdown output")
+	cmd.Flags().BoolVar(&timestampsFlag, "timestamps", false, "Parse CSV/TSV input with log_timestamp,domain format")
 
 	return cmd
 }
@@ -549,4 +599,72 @@ func outputAnalysis(analysis *roast.CampaignAnalysis, format string, includeJSON
 		fmt.Print(markdown)
 		return nil
 	}
+}
+
+// parseTimestampedFile reads a CSV/TSV file with log_timestamp,domain format
+func parseTimestampedFile(path string) ([]roast.TimestampedDomain, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	return parseTimestampedReader(file)
+}
+
+// parseTimestampedStdin reads CSV/TSV from stdin with log_timestamp,domain format
+func parseTimestampedStdin() ([]roast.TimestampedDomain, error) {
+	return parseTimestampedReader(os.Stdin)
+}
+
+// parseTimestampedReader parses CSV/TSV input with log_timestamp,domain format
+func parseTimestampedReader(r *os.File) ([]roast.TimestampedDomain, error) {
+	var pairs []roast.TimestampedDomain
+	scanner := bufio.NewScanner(r)
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+
+		// Try comma first, then tab
+		var fields []string
+		if strings.Contains(line, ",") {
+			fields = strings.Split(line, ",")
+		} else if strings.Contains(line, "\t") {
+			fields = strings.Split(line, "\t")
+		} else {
+			continue // Skip lines without delimiters
+		}
+
+		if len(fields) < 2 {
+			continue
+		}
+
+		timestampStr := strings.TrimSpace(fields[0])
+		domain := strings.TrimSpace(fields[1])
+
+		logTime, err := parseRFC3339(timestampStr)
+		if err != nil {
+			// Skip lines with invalid timestamps
+			continue
+		}
+
+		pairs = append(pairs, roast.TimestampedDomain{
+			Domain:       domain,
+			LogTimestamp: logTime,
+		})
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	return pairs, nil
+}
+
+// parseRFC3339 parses an RFC3339 timestamp string
+func parseRFC3339(s string) (time.Time, error) {
+	return time.Parse(time.RFC3339, s)
 }

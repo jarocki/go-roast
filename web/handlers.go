@@ -17,7 +17,9 @@ import (
 )
 
 type apiRequest struct {
-	Input string `json:"input"`
+	Input        string            `json:"input"`
+	LogTimestamp string            `json:"log_timestamp,omitempty"` // RFC3339 format for single timestamp
+	LogTimestamps map[string]string `json:"log_timestamps,omitempty"` // domain -> RFC3339 mapping
 }
 
 type apiError struct {
@@ -51,6 +53,23 @@ func handleDecode(w http.ResponseWriter, r *http.Request) {
 	lines := splitLines(req.Input)
 	if len(lines) == 0 {
 		writeJSON(w, http.StatusBadRequest, apiError{Error: "no input provided"})
+		return
+	}
+
+	// If log_timestamp is provided, use timezone estimation
+	if req.LogTimestamp != "" {
+		logTime, err := time.Parse(time.RFC3339, req.LogTimestamp)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, apiError{Error: "invalid log_timestamp format (use RFC3339): " + err.Error()})
+			return
+		}
+
+		results := make([]*roast.DecodedOAST, len(lines))
+		for i, line := range lines {
+			result, _ := roast.DecodeWithLogTime(line, logTime)
+			results[i] = result
+		}
+		writeJSON(w, http.StatusOK, results)
 		return
 	}
 
@@ -136,7 +155,36 @@ func handleAnalyze(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	analysis := roast.AnalyzeCampaignFromString(req.Input)
+	var analysis *roast.CampaignAnalysis
+
+	// If log_timestamps mapping is provided, use timezone estimation
+	if len(req.LogTimestamps) > 0 {
+		var pairs []roast.TimestampedDomain
+		lines := splitLines(req.Input)
+
+		for _, domain := range lines {
+			if timestampStr, ok := req.LogTimestamps[domain]; ok {
+				logTime, err := time.Parse(time.RFC3339, timestampStr)
+				if err != nil {
+					writeJSON(w, http.StatusBadRequest, apiError{Error: "invalid timestamp for domain " + domain + ": " + err.Error()})
+					return
+				}
+				pairs = append(pairs, roast.TimestampedDomain{
+					Domain:       domain,
+					LogTimestamp: logTime,
+				})
+			}
+		}
+
+		if len(pairs) > 0 {
+			analysis = roast.AnalyzeCampaignWithTimestamps(pairs)
+		} else {
+			analysis = roast.AnalyzeCampaignFromString(req.Input)
+		}
+	} else {
+		analysis = roast.AnalyzeCampaignFromString(req.Input)
+	}
+
 	writeJSON(w, http.StatusOK, analysis)
 }
 
@@ -153,7 +201,36 @@ func handleAnalyzeMarkdown(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	analysis := roast.AnalyzeCampaignFromString(req.Input)
+	var analysis *roast.CampaignAnalysis
+
+	// If log_timestamps mapping is provided, use timezone estimation
+	if len(req.LogTimestamps) > 0 {
+		var pairs []roast.TimestampedDomain
+		lines := splitLines(req.Input)
+
+		for _, domain := range lines {
+			if timestampStr, ok := req.LogTimestamps[domain]; ok {
+				logTime, err := time.Parse(time.RFC3339, timestampStr)
+				if err != nil {
+					writeJSON(w, http.StatusBadRequest, apiError{Error: "invalid timestamp for domain " + domain + ": " + err.Error()})
+					return
+				}
+				pairs = append(pairs, roast.TimestampedDomain{
+					Domain:       domain,
+					LogTimestamp: logTime,
+				})
+			}
+		}
+
+		if len(pairs) > 0 {
+			analysis = roast.AnalyzeCampaignWithTimestamps(pairs)
+		} else {
+			analysis = roast.AnalyzeCampaignFromString(req.Input)
+		}
+	} else {
+		analysis = roast.AnalyzeCampaignFromString(req.Input)
+	}
+
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	w.Write([]byte(analysis.FormatMarkdown()))
 }

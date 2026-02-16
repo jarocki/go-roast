@@ -102,6 +102,54 @@ func Decode(input string) (*DecodedOAST, error) {
 	return result, nil
 }
 
+// DecodeWithLogTime decodes a single OAST domain with log timestamp for timezone estimation.
+// logTime should be the UTC timestamp from DNS/web logs when this domain was observed.
+func DecodeWithLogTime(input string, logTime time.Time) (*DecodedOAST, error) {
+	result, err := Decode(input)
+	if err != nil {
+		return result, err
+	}
+
+	result.LogTimestamp = &logTime
+
+	// Only estimate timezone for valid domains
+	if result.Valid {
+		// Estimate from XID timestamp
+		result.TimezoneEstimate = EstimateTimezone(result.Timestamp, logTime)
+
+		// If v1.0.1 with reliable nonce timestamp, cross-check with nonce
+		if result.NonceTimestamp != nil {
+			nonceEst := EstimateTimezoneFromNonce(*result.NonceTimestamp, logTime)
+			// If both agree, bump confidence
+			if result.TimezoneEstimate != nil && nonceEst != nil &&
+				result.TimezoneEstimate.OffsetSeconds == nonceEst.OffsetSeconds {
+				if result.TimezoneEstimate.Confidence == "low" {
+					result.TimezoneEstimate.Confidence = "medium"
+				} else if result.TimezoneEstimate.Confidence == "medium" {
+					result.TimezoneEstimate.Confidence = "high"
+				}
+				result.TimezoneEstimate.Reasoning = append(result.TimezoneEstimate.Reasoning,
+					"XID and nonce timestamps agree on offset")
+			}
+		}
+	}
+
+	return result, err
+}
+
+// DecodeBatchWithLogTimes decodes multiple OAST domains with log timestamps.
+func DecodeBatchWithLogTimes(pairs []TimestampedDomain) []*DecodedOAST {
+	results := make([]*DecodedOAST, 0, len(pairs))
+	for _, p := range pairs {
+		d, _ := DecodeWithLogTime(p.Domain, p.LogTimestamp)
+		if d != nil {
+			results = append(results, d)
+		}
+	}
+	CrossReferenceClassifications(results)
+	return results
+}
+
 // DecodeBatch decodes multiple OAST domains and cross-references classifications.
 func DecodeBatch(inputs []string) []*DecodedOAST {
 	results := make([]*DecodedOAST, len(inputs))

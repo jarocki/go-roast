@@ -11,6 +11,7 @@
 
   // DOM refs
   const domainInput = document.getElementById('domain-input');
+  const logTimestampInput = document.getElementById('log-timestamp');
   const actionSelect = document.getElementById('action-select');
   const submitBtn = document.getElementById('submit-btn');
   const resultsSection = document.getElementById('results-section');
@@ -100,10 +101,18 @@
     submitBtn.textContent = 'Processing...';
 
     try {
+      const requestBody = { input: input };
+
+      // Include log_timestamp if provided
+      const logTimestamp = logTimestampInput.value.trim();
+      if (logTimestamp) {
+        requestBody.log_timestamp = logTimestamp;
+      }
+
       const resp = await fetch('/api/' + action, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input: input })
+        body: JSON.stringify(requestBody)
       });
 
       const data = await resp.json();
@@ -216,6 +225,19 @@
         }
         html += '</td></tr>';
       }
+
+      // Timezone estimate row
+      if (r.timezone_estimate) {
+        const tz = r.timezone_estimate;
+        html += '<tr><td colspan="10" class="timezone-detail">';
+        html += '<strong>Timezone:</strong> ' + escapeHtml(tz.utc_designation);
+        html += ' (offset: ' + tz.offset_seconds + 's, confidence: ' + tz.confidence + ')';
+        html += ' method: ' + tz.method;
+        if (tz.reasoning && tz.reasoning.length > 0) {
+          html += '<br>' + tz.reasoning.map(escapeHtml).join('<br>');
+        }
+        html += '</td></tr>';
+      }
     }
 
     html += '</tbody></table>';
@@ -294,6 +316,16 @@
       html += '<strong>Server Versions:</strong> ';
       html += Object.entries(data.server_versions).map(([k, v]) => versionBadge(k) + ' ' + v).join(' ');
       html += '<br>';
+    }
+
+    // Timezone consensus
+    if (data.consensus_timezone) {
+      const tz = data.consensus_timezone;
+      html += '<br><strong>Consensus Timezone:</strong> ' + escapeHtml(tz.utc_designation);
+      html += ' (confidence: ' + tz.confidence + ')<br>';
+      if (tz.reasoning && tz.reasoning.length > 0) {
+        html += '<em>' + tz.reasoning.slice(0, 2).map(escapeHtml).join(', ') + '</em><br>';
+      }
     }
 
     // Cross-reference findings
