@@ -49,6 +49,10 @@ type CampaignAnalysis struct {
 	CrossRefFindings  []string                  `json:"cross_ref_findings,omitempty"`
 	TimezoneEstimates []TimezoneEstimate        `json:"timezone_estimates,omitempty"`
 	ConsensusTimezone *TimezoneEstimate         `json:"consensus_timezone,omitempty"`
+	// 2nd order analytics
+	MachineClusters   []MachineCluster          `json:"machine_clusters,omitempty"`
+	GapAnalysis       *GapAnalysis              `json:"gap_analysis,omitempty"`
+	PIDSessions       []PIDSession              `json:"pid_sessions,omitempty"`
 }
 
 // AnalyzeCampaignFromFile analyzes OAST domains from a file and returns campaign statistics
@@ -297,6 +301,11 @@ func analyzeCampaign(matches []OASTMatch, decoded []*DecodedOAST) *CampaignAnaly
 	// Generate executive summary
 	analysis.ExecutiveSummary = generateExecutiveSummary(analysis)
 
+	// Compute 2nd order analytics
+	analysis.MachineClusters = ClusterByMachine(decoded)
+	analysis.GapAnalysis = AnalyzeCounterGaps(decoded)
+	analysis.PIDSessions = AnalyzePIDLifecycles(decoded)
+
 	return analysis
 }
 
@@ -390,9 +399,20 @@ func generateExecutiveSummary(a *CampaignAnalysis) string {
 	return strings.Join(parts, " ")
 }
 
+// MarkdownOptions controls which sections appear in markdown output
+type MarkdownOptions struct {
+	IncludeClusterDetails bool // Include Machine Clustering, PID Lifecycle, and Gap Analysis sections
+}
+
 // FormatMarkdown returns a nicely formatted markdown report with executive summary,
 // session analytics, cross-reference findings, and per-campaign narratives.
+// Uses default options (cluster details enabled).
 func (a *CampaignAnalysis) FormatMarkdown() string {
+	return a.FormatMarkdownWithOptions(MarkdownOptions{IncludeClusterDetails: true})
+}
+
+// FormatMarkdownWithOptions returns a markdown report with configurable sections.
+func (a *CampaignAnalysis) FormatMarkdownWithOptions(opts MarkdownOptions) string {
 	var sb strings.Builder
 
 	sb.WriteString("# OAST Campaign Analysis\n\n")
@@ -639,6 +659,94 @@ func (a *CampaignAnalysis) FormatMarkdown() string {
 				count := offsetCounts[offset]
 				sb.WriteString(fmt.Sprintf("| %d | %s | %s | %s | %d |\n",
 					est.OffsetSeconds, est.UTCDesignation, est.Confidence, est.Method, count))
+			}
+		}
+	}
+
+	// 2nd Order Analytics sections (controlled by IncludeClusterDetails flag)
+	if opts.IncludeClusterDetails {
+		// Machine Clustering section
+		if len(a.MachineClusters) > 0 {
+			sb.WriteString("\n## Machine Clustering\n\n")
+			sb.WriteString(fmt.Sprintf("Identified %d distinct machine(s):\n\n", len(a.MachineClusters)))
+
+			for _, cluster := range a.MachineClusters {
+				sb.WriteString(fmt.Sprintf("### Machine `%s`\n\n", cluster.MachineID))
+				sb.WriteString(fmt.Sprintf("- **Domains:** %d\n", cluster.DomainCount))
+				sb.WriteString(fmt.Sprintf("- **Activity:** %s to %s (%s)\n",
+					cluster.FirstSeen.Format(time.RFC3339),
+					cluster.LastSeen.Format(time.RFC3339),
+					cluster.Duration))
+				if cluster.Velocity > 0 {
+					sb.WriteString(fmt.Sprintf("- **Velocity:** %.1f domains/hour\n", cluster.Velocity))
+				}
+				sb.WriteString(fmt.Sprintf("- **PIDs:** %d unique (", len(cluster.PIDs)))
+				pidStrs := make([]string, len(cluster.PIDs))
+				for i, pid := range cluster.PIDs {
+					pidStrs[i] = fmt.Sprintf("%d", pid)
+				}
+				sb.WriteString(strings.Join(pidStrs, ", ") + ")\n")
+				sb.WriteString(fmt.Sprintf("- **Counter Range:** %d - %d\n", cluster.CounterRange[0], cluster.CounterRange[1]))
+
+				if len(cluster.Campaigns) > 0 {
+					sb.WriteString(fmt.Sprintf("- **Campaigns:** %s\n", strings.Join(cluster.Campaigns, ", ")))
+				}
+
+				if cluster.TimezoneConsensus != nil {
+					sb.WriteString(fmt.Sprintf("- **Timezone:** %s (%s confidence)\n",
+						cluster.TimezoneConsensus.UTCDesignation,
+						cluster.TimezoneConsensus.Confidence))
+				}
+				sb.WriteString("\n")
+			}
+		}
+
+		// PID Lifecycle section
+		if len(a.PIDSessions) > 0 {
+			sb.WriteString("\n## PID Lifecycle Analysis\n\n")
+			sb.WriteString(fmt.Sprintf("Tracked %d PID session(s):\n\n", len(a.PIDSessions)))
+
+			for _, session := range a.PIDSessions {
+				sb.WriteString(fmt.Sprintf("**PID %d** (machine `%s`):\n", session.PID, session.MachineID))
+				sb.WriteString(fmt.Sprintf("- Domains: %d\n", session.DomainCount))
+				sb.WriteString(fmt.Sprintf("- Active: %s to %s (%s)\n",
+					session.FirstSeen.Format(time.RFC3339),
+					session.LastSeen.Format(time.RFC3339),
+					session.Duration))
+				if session.Velocity > 0 {
+					sb.WriteString(fmt.Sprintf("- Velocity: %.1f domains/hour\n", session.Velocity))
+				}
+				sb.WriteString(fmt.Sprintf("- Counter range: %d - %d\n\n", session.CounterRange[0], session.CounterRange[1]))
+			}
+		}
+
+		// Counter Gap Analysis section
+		if a.GapAnalysis != nil && a.GapAnalysis.TotalGaps > 0 {
+			sb.WriteString("\n## Counter Gap Analysis\n\n")
+			sb.WriteString(fmt.Sprintf("**Summary:** %d gap(s) detected, %d domains missing from captured sequences.\n\n",
+				a.GapAnalysis.TotalGaps, a.GapAnalysis.MissingDomains))
+
+			// Group gaps by machine
+			gapsByMachine := make(map[string][]CounterGap)
+			for _, gap := range a.GapAnalysis.Gaps {
+				gapsByMachine[gap.MachineID] = append(gapsByMachine[gap.MachineID], gap)
+			}
+
+			for machineID, gaps := range gapsByMachine {
+				sb.WriteString(fmt.Sprintf("**Machine `%s`:** %d gap(s)\n\n", machineID, len(gaps)))
+				for _, gap := range gaps {
+					sb.WriteString(fmt.Sprintf("- PID %d: counters %d → %d (%d missing)",
+						gap.PID, gap.StartCounter, gap.EndCounter, gap.GapSize))
+					if gap.Suspicious {
+						sb.WriteString(" **[SUSPICIOUS: >100 missing]**")
+					}
+					sb.WriteString("\n")
+					sb.WriteString(fmt.Sprintf("  - Time gap: %ds (%s to %s)\n",
+						gap.TimeGap,
+						gap.StartTime.Format(time.RFC3339),
+						gap.EndTime.Format(time.RFC3339)))
+				}
+				sb.WriteString("\n")
 			}
 		}
 	}

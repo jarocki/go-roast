@@ -848,3 +848,61 @@ Use these enhanced MCP tools for live data and advanced analysis:
 
 	return mcp.NewToolResultText(content), nil
 }
+
+func oastClusterMachinesTool() mcp.Tool {
+	return mcp.NewTool("oast_cluster_machines",
+		mcp.WithDescription("Cluster OAST domains by MachineID to reveal distinct hosts, activity patterns, and campaign infrastructure"),
+		mcp.WithString("domains",
+			mcp.Required(),
+			mcp.Description("Newline-separated list of OAST domains to cluster"),
+		),
+	)
+}
+
+func handleOASTClusterMachines(args map[string]interface{}) (*mcp.CallToolResult, error) {
+	domainsRaw, ok := args["domains"]
+	if !ok {
+		return mcp.NewToolResultError("domains parameter required"), nil
+	}
+
+	domainsStr, ok := domainsRaw.(string)
+	if !ok {
+		return mcp.NewToolResultError("domains must be a string"), nil
+	}
+
+	// Split by newlines and decode each domain
+	lines := strings.Split(domainsStr, "\n")
+	var decoded []*roast.DecodedOAST
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		// Extract subdomain if FQDN provided
+		subdomain := line
+		if idx := strings.Index(line, "."); idx > 0 {
+			subdomain = line[:idx]
+		}
+
+		d, err := roast.Decode(subdomain)
+		if err == nil && d != nil {
+			decoded = append(decoded, d)
+		}
+	}
+
+	if len(decoded) == 0 {
+		return mcp.NewToolResultError("no valid OAST domains decoded"), nil
+	}
+
+	// Cluster by machine
+	clusters := roast.ClusterByMachine(decoded)
+
+	data, err := json.MarshalIndent(clusters, "", "  ")
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to encode results: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(string(data)), nil
+}

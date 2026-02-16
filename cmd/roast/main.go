@@ -179,6 +179,7 @@ func analyzeCmd() *cobra.Command {
 	var fileFlag string
 	var includeJSON bool
 	var timestampsFlag bool
+	var clusterFlag bool
 
 	cmd := &cobra.Command{
 		Use:   "analyze",
@@ -222,13 +223,14 @@ func analyzeCmd() *cobra.Command {
 				}
 			}
 
-			return outputAnalysis(analysis, outputFlag, includeJSON)
+			return outputAnalysis(analysis, outputFlag, includeJSON, clusterFlag)
 		},
 	}
 
 	cmd.Flags().StringVarP(&fileFlag, "file", "f", "", "File to analyze (if not provided, reads from stdin)")
 	cmd.Flags().BoolVar(&includeJSON, "include-json", false, "Include raw JSON data in markdown output")
 	cmd.Flags().BoolVar(&timestampsFlag, "timestamps", false, "Parse CSV/TSV input with log_timestamp,domain format")
+	cmd.Flags().BoolVar(&clusterFlag, "cluster", true, "Include machine clustering, PID lifecycle, and gap analysis sections in markdown (default: true)")
 
 	return cmd
 }
@@ -569,14 +571,15 @@ func readFromStdin() (string, error) {
 	return sb.String(), nil
 }
 
-func outputAnalysis(analysis *roast.CampaignAnalysis, format string, includeJSON bool) error {
+func outputAnalysis(analysis *roast.CampaignAnalysis, format string, includeJSON bool, includeCluster bool) error {
 	switch strings.ToLower(format) {
 	case "json":
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(analysis)
 	case "markdown", "md":
-		markdown := analysis.FormatMarkdown()
+		opts := roast.MarkdownOptions{IncludeClusterDetails: includeCluster}
+		markdown := analysis.FormatMarkdownWithOptions(opts)
 		if includeJSON {
 			data, err := json.MarshalIndent(analysis, "", "  ")
 			if err != nil {
@@ -588,7 +591,8 @@ func outputAnalysis(analysis *roast.CampaignAnalysis, format string, includeJSON
 		return nil
 	default:
 		// Default to markdown for campaign analysis
-		markdown := analysis.FormatMarkdown()
+		opts := roast.MarkdownOptions{IncludeClusterDetails: includeCluster}
+		markdown := analysis.FormatMarkdownWithOptions(opts)
 		if includeJSON {
 			data, err := json.MarshalIndent(analysis, "", "  ")
 			if err != nil {
