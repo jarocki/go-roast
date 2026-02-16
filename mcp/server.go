@@ -61,6 +61,7 @@ func Serve() error {
 	s.AddTool(extractOASTFileTool(), handleExtractOASTFile)
 	s.AddTool(validateOASTTool(), handleValidateOAST)
 	s.AddTool(campaignAnalysisTool(), handleCampaignAnalysis)
+	s.AddTool(estimateTimezoneTool(), handleEstimateTimezone)
 
 	// Legacy tools (kept for backward compatibility)
 	s.AddTool(fetchInteractshDomainsTool(), handleFetchInteractshDomains)

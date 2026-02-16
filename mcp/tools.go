@@ -278,6 +278,53 @@ func handleCampaignAnalysis(args map[string]interface{}) (*mcp.CallToolResult, e
 	return mcp.NewToolResultText(markdown), nil
 }
 
+func estimateTimezoneTool() mcp.Tool {
+	return mcp.NewTool("oast_estimate_timezone",
+		mcp.WithDescription("Estimate timezone offset from OAST domain XID timestamp vs log-observed UTC timestamp"),
+		mcp.WithString("domain",
+			mcp.Required(),
+			mcp.Description("OAST domain to decode and analyze"),
+		),
+		mcp.WithString("log_timestamp",
+			mcp.Required(),
+			mcp.Description("UTC timestamp from DNS/web logs (RFC3339 format, e.g., 2025-02-15T21:00:00Z)"),
+		),
+	)
+}
+
+func handleEstimateTimezone(args map[string]interface{}) (*mcp.CallToolResult, error) {
+	domain, ok := args["domain"].(string)
+	if !ok {
+		return mcp.NewToolResultError("domain must be a string"), nil
+	}
+
+	logTimestampStr, ok := args["log_timestamp"].(string)
+	if !ok {
+		return mcp.NewToolResultError("log_timestamp must be a string"), nil
+	}
+
+	// Parse log timestamp
+	logTime, err := time.Parse(time.RFC3339, logTimestampStr)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("invalid log_timestamp format (use RFC3339): %v", err)), nil
+	}
+
+	// Decode with log time for timezone estimation
+	result, err := roast.DecodeWithLogTime(domain, logTime)
+	if err != nil {
+		// Return the result even on decode error (might be web client domain with classification)
+		data, _ := json.MarshalIndent(result, "", "  ")
+		return mcp.NewToolResultText(string(data)), nil
+	}
+
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to encode results: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(string(data)), nil
+}
+
 // Enhanced tools with live fetching and caching
 
 func fetchInteractshDomainsLiveTool() mcp.Tool {

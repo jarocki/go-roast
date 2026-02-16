@@ -20,32 +20,35 @@ type CampaignStats struct {
 	KSortValues      []string              `json:"ksort_values"`
 	ClientTypes      map[ClientType]int    `json:"client_types,omitempty"`
 	ServerVersions   map[ServerVersion]int `json:"server_versions,omitempty"`
-	NonceTimestampMin *time.Time           `json:"nonce_timestamp_min,omitempty"`
-	NonceTimestampMax *time.Time           `json:"nonce_timestamp_max,omitempty"`
-	NonceCounterMinV101 *uint32            `json:"nonce_counter_min_v101,omitempty"`
-	NonceCounterMaxV101 *uint32            `json:"nonce_counter_max_v101,omitempty"`
-	SessionAgeMinSecs *int64              `json:"session_age_min_secs,omitempty"`
-	SessionAgeMaxSecs *int64              `json:"session_age_max_secs,omitempty"`
+	NonceTimestampMin   *time.Time        `json:"nonce_timestamp_min,omitempty"`
+	NonceTimestampMax   *time.Time        `json:"nonce_timestamp_max,omitempty"`
+	NonceCounterMinV101 *uint32           `json:"nonce_counter_min_v101,omitempty"`
+	NonceCounterMaxV101 *uint32           `json:"nonce_counter_max_v101,omitempty"`
+	SessionAgeMinSecs   *int64            `json:"session_age_min_secs,omitempty"`
+	SessionAgeMaxSecs   *int64            `json:"session_age_max_secs,omitempty"`
+	TimezoneEstimates   []TimezoneEstimate `json:"timezone_estimates,omitempty"`
 }
 
 // CampaignAnalysis contains the full analysis of OAST domains
 type CampaignAnalysis struct {
-	TotalDomains     int                       `json:"total_domains"`
-	ValidDomains     int                       `json:"valid_domains"`
-	InvalidDomains   int                       `json:"invalid_domains"`
-	UniqueCampaigns  int                       `json:"unique_campaigns"`
-	FirstSeen        time.Time                 `json:"first_seen,omitempty"`
-	LastSeen         time.Time                 `json:"last_seen,omitempty"`
-	TimeSpan         string                    `json:"time_span,omitempty"`
-	UniqueMachines   int                       `json:"unique_machines"`
-	UniquePIDs       int                       `json:"unique_pids"`
-	MachineIDs       []string                  `json:"machine_ids"`
-	PIDs             []uint16                  `json:"pids"`
-	Campaigns        map[string]*CampaignStats `json:"campaigns"`
-	ClientTypes      map[ClientType]int        `json:"client_types,omitempty"`
-	ServerVersions   map[ServerVersion]int     `json:"server_versions,omitempty"`
-	ExecutiveSummary string                    `json:"executive_summary,omitempty"`
-	CrossRefFindings []string                  `json:"cross_ref_findings,omitempty"`
+	TotalDomains      int                       `json:"total_domains"`
+	ValidDomains      int                       `json:"valid_domains"`
+	InvalidDomains    int                       `json:"invalid_domains"`
+	UniqueCampaigns   int                       `json:"unique_campaigns"`
+	FirstSeen         time.Time                 `json:"first_seen,omitempty"`
+	LastSeen          time.Time                 `json:"last_seen,omitempty"`
+	TimeSpan          string                    `json:"time_span,omitempty"`
+	UniqueMachines    int                       `json:"unique_machines"`
+	UniquePIDs        int                       `json:"unique_pids"`
+	MachineIDs        []string                  `json:"machine_ids"`
+	PIDs              []uint16                  `json:"pids"`
+	Campaigns         map[string]*CampaignStats `json:"campaigns"`
+	ClientTypes       map[ClientType]int        `json:"client_types,omitempty"`
+	ServerVersions    map[ServerVersion]int     `json:"server_versions,omitempty"`
+	ExecutiveSummary  string                    `json:"executive_summary,omitempty"`
+	CrossRefFindings  []string                  `json:"cross_ref_findings,omitempty"`
+	TimezoneEstimates []TimezoneEstimate        `json:"timezone_estimates,omitempty"`
+	ConsensusTimezone *TimezoneEstimate         `json:"consensus_timezone,omitempty"`
 }
 
 // AnalyzeCampaignFromFile analyzes OAST domains from a file and returns campaign statistics
@@ -62,6 +65,88 @@ func AnalyzeCampaignFromFile(path string) (*CampaignAnalysis, error) {
 func AnalyzeCampaignFromString(text string) *CampaignAnalysis {
 	matches, decoded := ExtractAndDecode(text)
 	return analyzeCampaign(matches, decoded)
+}
+
+// AnalyzeCampaignWithTimestamps analyzes OAST domains with log timestamps for timezone estimation.
+func AnalyzeCampaignWithTimestamps(pairs []TimestampedDomain) *CampaignAnalysis {
+	decoded := DecodeBatchWithLogTimes(pairs)
+
+	// Create pseudo-matches for analyzeCampaign (it expects matches but we already have decoded)
+	matches := make([]OASTMatch, len(decoded))
+	for i, d := range decoded {
+		matches[i] = OASTMatch{
+			Full:      d.Original,
+			Subdomain: d.Original,
+		}
+	}
+
+	analysis := analyzeCampaign(matches, decoded)
+
+	// Collect timezone estimates
+	var allEstimates []TimezoneEstimate
+	estimatesByMachine := make(map[string][]TimezoneEstimate)
+
+	for _, d := range decoded {
+		if d.TimezoneEstimate != nil {
+			allEstimates = append(allEstimates, *d.TimezoneEstimate)
+			if d.Valid {
+				estimatesByMachine[d.MachineID] = append(estimatesByMachine[d.MachineID], *d.TimezoneEstimate)
+			}
+		}
+	}
+
+	analysis.TimezoneEstimates = allEstimates
+
+	// Compute consensus timezone
+	if len(allEstimates) > 0 {
+		// Try to find consensus per machine first
+		var bestConsensus *TimezoneEstimate
+		var bestConfidence string
+
+		for _, estimates := range estimatesByMachine {
+			if len(estimates) > 0 {
+				consensus := ConsensusTimezone(estimates)
+				if consensus != nil {
+					if bestConsensus == nil {
+						bestConsensus = consensus
+						bestConfidence = consensus.Confidence
+					} else {
+						// Prefer higher confidence or more domains
+						if confidenceLevel(consensus.Confidence) > confidenceLevel(bestConfidence) {
+							bestConsensus = consensus
+							bestConfidence = consensus.Confidence
+						}
+					}
+				}
+			}
+		}
+
+		// If we have estimates from multiple machines, compute global consensus
+		if len(estimatesByMachine) > 1 {
+			globalConsensus := ConsensusTimezone(allEstimates)
+			if globalConsensus != nil && confidenceLevel(globalConsensus.Confidence) >= confidenceLevel(bestConfidence) {
+				bestConsensus = globalConsensus
+			}
+		}
+
+		analysis.ConsensusTimezone = bestConsensus
+	}
+
+	return analysis
+}
+
+// confidenceLevel converts confidence string to numeric level for comparison
+func confidenceLevel(conf string) int {
+	switch conf {
+	case "high":
+		return 3
+	case "medium":
+		return 2
+	case "low":
+		return 1
+	default:
+		return 0
+	}
 }
 
 func analyzeCampaign(matches []OASTMatch, decoded []*DecodedOAST) *CampaignAnalysis {
@@ -507,9 +592,60 @@ func (a *CampaignAnalysis) FormatMarkdown() string {
 		}
 	}
 
+	// Timezone Analysis section
+	if a.ConsensusTimezone != nil || len(a.TimezoneEstimates) > 0 {
+		sb.WriteString("\n## Timezone Analysis\n\n")
+
+		if a.ConsensusTimezone != nil {
+			sb.WriteString(fmt.Sprintf("**Consensus Timezone:** %s (confidence: %s)\n\n",
+				a.ConsensusTimezone.UTCDesignation, a.ConsensusTimezone.Confidence))
+			sb.WriteString(fmt.Sprintf("- **Offset:** %d seconds (%.1f hours)\n",
+				a.ConsensusTimezone.OffsetSeconds, a.ConsensusTimezone.OffsetHours))
+			sb.WriteString(fmt.Sprintf("- **Method:** %s\n", a.ConsensusTimezone.Method))
+			if len(a.ConsensusTimezone.Reasoning) > 0 {
+				sb.WriteString("- **Analysis:**\n")
+				for _, reason := range a.ConsensusTimezone.Reasoning {
+					sb.WriteString(fmt.Sprintf("  - %s\n", reason))
+				}
+			}
+			sb.WriteString("\n")
+		}
+
+		if len(a.TimezoneEstimates) > 1 {
+			sb.WriteString("### Individual Estimates\n\n")
+			sb.WriteString("| Offset | UTC | Confidence | Method | Count |\n")
+			sb.WriteString("|--------|-----|------------|--------|-------|\n")
+
+			// Group estimates by offset
+			offsetCounts := make(map[int]int)
+			offsetExamples := make(map[int]*TimezoneEstimate)
+			for i := range a.TimezoneEstimates {
+				est := &a.TimezoneEstimates[i]
+				offsetCounts[est.OffsetSeconds]++
+				if offsetExamples[est.OffsetSeconds] == nil {
+					offsetExamples[est.OffsetSeconds] = est
+				}
+			}
+
+			// Sort by offset
+			var offsets []int
+			for offset := range offsetCounts {
+				offsets = append(offsets, offset)
+			}
+			sort.Ints(offsets)
+
+			for _, offset := range offsets {
+				est := offsetExamples[offset]
+				count := offsetCounts[offset]
+				sb.WriteString(fmt.Sprintf("| %d | %s | %s | %s | %d |\n",
+					est.OffsetSeconds, est.UTCDesignation, est.Confidence, est.Method, count))
+			}
+		}
+	}
+
 	// Timeline section
 	if !a.FirstSeen.IsZero() && a.ValidDomains > 0 {
-		sb.WriteString("## Timeline\n\n")
+		sb.WriteString("\n## Timeline\n\n")
 		sb.WriteString(fmt.Sprintf("Activity observed from %s to %s (%s).\n",
 			a.FirstSeen.Format(time.RFC3339),
 			a.LastSeen.Format(time.RFC3339),
