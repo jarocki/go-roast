@@ -332,7 +332,7 @@
     if (data.cross_ref_findings && data.cross_ref_findings.length > 0) {
       html += '<br><strong>Cross-Reference Findings:</strong><br>';
       data.cross_ref_findings.forEach(function(f) {
-        html += '- ' + escapeHtml(f) + '<br>';
+        html += '&bull; ' + escapeHtml(f) + '<br>';
       });
     }
 
@@ -347,7 +347,143 @@
     }
 
     html += '</div>';
+
+    // --- Machine Clustering section ---
+    if (data.machine_clusters && data.machine_clusters.length > 0) {
+      html += '<div class="analysis-section">';
+      html += '<h3 class="section-heading">Machine Clustering</h3>';
+      html += '<p class="section-note">' + data.machine_clusters.length + ' distinct machine(s) identified</p>';
+      html += '<table class="results-table"><thead><tr>';
+      html += '<th>Machine ID</th><th>Domains</th><th>Campaigns</th><th>PIDs</th>';
+      html += '<th>First Seen</th><th>Last Seen</th><th>Duration</th><th>Timezone</th>';
+      html += '</tr></thead><tbody>';
+      for (const cluster of data.machine_clusters) {
+        const tz = cluster.timezone_consensus;
+        html += '<tr>';
+        html += '<td><code>' + escapeHtml(cluster.machine_id) + '</code></td>';
+        html += '<td>' + cluster.domain_count + '</td>';
+        html += '<td>' + (cluster.campaigns || []).map(escapeHtml).join(', ') + '</td>';
+        html += '<td>' + (cluster.pids || []).join(', ') + '</td>';
+        html += '<td>' + formatTimestamp(cluster.first_seen) + '</td>';
+        html += '<td>' + formatTimestamp(cluster.last_seen) + '</td>';
+        html += '<td>' + escapeHtml(cluster.duration || '') + '</td>';
+        html += '<td>' + (tz ? escapeHtml(tz.utc_designation) + ' ' + confBadge(tz.confidence) : '') + '</td>';
+        html += '</tr>';
+      }
+      html += '</tbody></table></div>';
+    }
+
+    // --- PID Lifecycle section ---
+    if (data.pid_sessions && data.pid_sessions.length > 0) {
+      html += '<div class="analysis-section">';
+      html += '<h3 class="section-heading">PID Lifecycle</h3>';
+      html += '<table class="results-table"><thead><tr>';
+      html += '<th>PID</th><th>Machine</th><th>Domains</th>';
+      html += '<th>First Seen</th><th>Last Seen</th><th>Duration</th><th>Counter Range</th>';
+      html += '</tr></thead><tbody>';
+      for (const session of data.pid_sessions) {
+        html += '<tr>';
+        html += '<td>' + session.pid + '</td>';
+        html += '<td><code>' + escapeHtml(session.machine_id) + '</code></td>';
+        html += '<td>' + session.domain_count + '</td>';
+        html += '<td>' + formatTimestamp(session.first_seen) + '</td>';
+        html += '<td>' + formatTimestamp(session.last_seen) + '</td>';
+        html += '<td>' + escapeHtml(session.duration || '') + '</td>';
+        html += '<td>' + (session.counter_range ? session.counter_range[0] + ' &ndash; ' + session.counter_range[1] : '') + '</td>';
+        html += '</tr>';
+      }
+      html += '</tbody></table></div>';
+    }
+
+    // --- Counter Gap Analysis section ---
+    const gaps = data.gap_analysis;
+    if (gaps && gaps.total_gaps > 0) {
+      html += '<div class="analysis-section">';
+      html += '<h3 class="section-heading">Counter Gap Analysis</h3>';
+      html += '<p class="section-note">' + gaps.total_gaps + ' gap(s) &mdash; ' + gaps.missing_domains + ' missing domain(s)</p>';
+      html += '<table class="results-table"><thead><tr>';
+      html += '<th>Machine</th><th>PID</th><th>Gap Start</th><th>Gap End</th>';
+      html += '<th>Missing</th><th>Time Gap</th><th>Flag</th>';
+      html += '</tr></thead><tbody>';
+      for (const gap of (gaps.gaps || [])) {
+        const suspiciousFlag = gap.suspicious
+          ? '<span class="badge badge-medium">SUSPICIOUS</span>'
+          : '';
+        html += '<tr>';
+        html += '<td><code>' + escapeHtml(gap.machine_id) + '</code></td>';
+        html += '<td>' + gap.pid + '</td>';
+        html += '<td>' + gap.start_counter + '</td>';
+        html += '<td>' + gap.end_counter + '</td>';
+        html += '<td>' + gap.gap_size + '</td>';
+        html += '<td>' + gap.time_gap_secs + 's</td>';
+        html += '<td>' + suspiciousFlag + '</td>';
+        html += '</tr>';
+      }
+      html += '</tbody></table></div>';
+    }
+
+    // --- Temporal Analysis section ---
+    if (data.temporal_profiles && data.temporal_profiles.length > 0) {
+      html += '<div class="analysis-section">';
+      html += '<h3 class="section-heading">Temporal Analysis</h3>';
+      html += '<table class="results-table"><thead><tr>';
+      html += '<th>Machine</th><th>Mean Interval</th><th>Std Dev</th><th>Bursts</th>';
+      html += '<th>Quiet Periods</th><th>Automated</th><th>Active Hours</th><th>Active Days</th>';
+      html += '</tr></thead><tbody>';
+      for (const tp of data.temporal_profiles) {
+        if (!tp) continue;
+        const activeHours = tp.active_hours && tp.active_hours.length > 0
+          ? tp.active_hours[0] + ':00&ndash;' + tp.active_hours[tp.active_hours.length - 1] + ':00'
+          : '';
+        const activeDays = tp.active_days && tp.active_days.length > 0
+          ? tp.active_days.map(escapeHtml).join(', ')
+          : '';
+        html += '<tr>';
+        html += '<td><code>' + escapeHtml(tp.machine_id) + '</code></td>';
+        html += '<td>' + (tp.mean_interval_secs || 0).toFixed(1) + 's</td>';
+        html += '<td>' + (tp.stddev_interval_secs || 0).toFixed(1) + 's</td>';
+        html += '<td>' + (tp.burst_count || 0) + '</td>';
+        html += '<td>' + (tp.quiet_periods || 0) + '</td>';
+        html += '<td>' + automatedBadge(tp.automated_likelihood) + '</td>';
+        html += '<td>' + activeHours + '</td>';
+        html += '<td>' + activeDays + '</td>';
+        html += '</tr>';
+        // Reasoning sub-row
+        if (tp.reasoning && tp.reasoning.length > 0) {
+          html += '<tr><td colspan="8" class="nonce-detail">';
+          html += tp.reasoning.map(escapeHtml).join(' &bull; ');
+          html += '</td></tr>';
+        }
+      }
+      html += '</tbody></table></div>';
+    }
+
+    // --- Attribution Profiles section (prominent — key forensic output) ---
+    if (data.attribution_profiles && data.attribution_profiles.length > 0) {
+      html += '<div class="analysis-section attribution-section">';
+      html += '<h3 class="section-heading">Attribution Profiles</h3>';
+      for (const ap of data.attribution_profiles) {
+        if (!ap) continue;
+        html += '<div class="attribution-card">';
+        html += '<div class="attribution-header">';
+        html += '<code>' + escapeHtml(ap.machine_id) + '</code> ';
+        html += confBadge(ap.overall_confidence);
+        html += '</div>';
+        html += '<p class="attribution-narrative">' + escapeHtml(ap.narrative || '') + '</p>';
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+
     resultsContainer.insertAdjacentHTML('beforeend', html);
+  }
+
+  // automatedBadge returns a coloured badge for automated likelihood level.
+  // high=orange (medium CSS), medium=teal (v102 CSS), low=grey (unknown CSS).
+  function automatedBadge(level) {
+    if (!level) return '';
+    const cls = { high: 'badge-medium', medium: 'badge-v102', low: 'badge-unknown' }[level] || 'badge-unknown';
+    return '<span class="badge ' + cls + '">' + escapeHtml(level) + '</span>';
   }
 
   // CSV generation and download
@@ -401,16 +537,82 @@
         csv += row.join(',') + '\n';
       }
     } else if (action === 'analyze') {
-      const headers = ['Metric', 'Value'];
+      // One row per machine cluster with all analytics fields flattened.
+      // Falls back to a summary row if no clusters are present.
+      const clusters = data.machine_clusters || [];
+
+      // Build lookup maps by machine_id
+      const temporalMap = {};
+      for (const tp of (data.temporal_profiles || [])) {
+        if (tp && tp.machine_id) temporalMap[tp.machine_id] = tp;
+      }
+      const attrMap = {};
+      for (const ap of (data.attribution_profiles || [])) {
+        if (ap && ap.machine_id) attrMap[ap.machine_id] = ap;
+      }
+      const gapCountMap = (data.gap_analysis && data.gap_analysis.per_machine_gaps) || {};
+      const missingMap = {};
+      for (const gap of ((data.gap_analysis && data.gap_analysis.gaps) || [])) {
+        missingMap[gap.machine_id] = (missingMap[gap.machine_id] || 0) + gap.gap_size;
+      }
+
+      const headers = [
+        'machine_id', 'campaigns', 'pids', 'domain_count',
+        'first_seen', 'last_seen', 'duration', 'velocity_per_hour',
+        'counter_min', 'counter_max',
+        'timezone_offset', 'timezone_utc', 'timezone_confidence',
+        'mean_interval_secs', 'stddev_interval_secs', 'burst_count',
+        'quiet_periods', 'automated_likelihood', 'active_hours', 'active_days',
+        'attribution_confidence', 'attribution_narrative',
+        'counter_gaps_count', 'total_missing_domains'
+      ];
       csv = headers.join(',') + '\n';
-      csv += 'TotalDomains,' + data.total_domains + '\n';
-      csv += 'ValidDomains,' + data.valid_domains + '\n';
-      csv += 'InvalidDomains,' + data.invalid_domains + '\n';
-      csv += 'UniqueCampaigns,' + data.unique_campaigns + '\n';
-      csv += 'UniqueMachines,' + data.unique_machines + '\n';
-      csv += 'UniquePIDs,' + data.unique_pids + '\n';
-      if (data.time_span) csv += 'TimeSpan,' + csvEscape(data.time_span) + '\n';
-      if (data.executive_summary) csv += 'ExecutiveSummary,' + csvEscape(data.executive_summary) + '\n';
+
+      if (clusters.length > 0) {
+        for (const c of clusters) {
+          const mid = c.machine_id || '';
+          const tz = c.timezone_consensus || {};
+          const tp = temporalMap[mid] || {};
+          const ap = attrMap[mid] || {};
+          const row = [
+            csvEscape(mid),
+            csvEscape((c.campaigns || []).join(' ')),
+            csvEscape((c.pids || []).join(' ')),
+            c.domain_count || 0,
+            c.first_seen ? formatTimestamp(c.first_seen) : '',
+            c.last_seen ? formatTimestamp(c.last_seen) : '',
+            csvEscape(c.duration || ''),
+            (c.velocity || 0).toFixed(2),
+            c.counter_range ? c.counter_range[0] : '',
+            c.counter_range ? c.counter_range[1] : '',
+            tz.offset_seconds != null ? tz.offset_seconds : '',
+            csvEscape(tz.utc_designation || ''),
+            tz.confidence || '',
+            tp.mean_interval_secs != null ? tp.mean_interval_secs.toFixed(2) : '',
+            tp.stddev_interval_secs != null ? tp.stddev_interval_secs.toFixed(2) : '',
+            tp.burst_count != null ? tp.burst_count : '',
+            tp.quiet_periods != null ? tp.quiet_periods : '',
+            tp.automated_likelihood || '',
+            csvEscape((tp.active_hours || []).join(' ')),
+            csvEscape((tp.active_days || []).join(' ')),
+            ap.overall_confidence || '',
+            csvEscape(ap.narrative || ''),
+            gapCountMap[mid] != null ? gapCountMap[mid] : 0,
+            missingMap[mid] != null ? missingMap[mid] : 0
+          ];
+          csv += row.join(',') + '\n';
+        }
+      } else {
+        // Fallback: single summary row when no cluster data available
+        const row = [
+          '(summary)', '', '', data.valid_domains || 0,
+          data.first_seen ? formatTimestamp(data.first_seen) : '',
+          data.last_seen ? formatTimestamp(data.last_seen) : '',
+          csvEscape(data.time_span || ''),
+          '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''
+        ];
+        csv += row.join(',') + '\n';
+      }
     }
 
     triggerDownload(csv, 'text/csv', 'roast-' + action + '.csv');
