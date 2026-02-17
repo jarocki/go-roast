@@ -21,9 +21,9 @@ Add version/client classification (v1.0.1 vs v1.0.2+, CLI vs web), accept web-cl
 
 ### Decision Log
 
-- **DEC-CLASSIFY-001**: zbase32 nonce decoding for v1.0.1 session tracking
-- **DEC-CLASSIFY-002**: Multi-signal classification engine (nonce format, timestamp analysis, pattern matching)
-- **DEC-CLASSIFY-003**: Cross-reference validation for campaign attribution confidence
+- **DEC-CLASSIFY-001**: zbase32 nonce decoding for v1.0.1 session tracking (implemented, not annotated in code)
+- **DEC-CLASSIFY-002**: Multi-signal classification engine (implemented, not annotated in code)
+- **DEC-CLASSIFY-003**: Cross-reference validation (implemented, not annotated in code)
 
 ## Phase 2: Timezone Estimation
 
@@ -87,15 +87,29 @@ Machine clustering, counter gap analysis, and PID lifecycle tracking. Groups dec
 
 Temporal pattern analysis, MCP enrichment data model, and attribution profile synthesis. Detects automated vs manual behavior, defines enrichment schema for GreyNoise/JA4/KEV integration, and synthesizes all signals into forensic narratives.
 
-**Status:** planned
+**Status:** completed
 
-### Key Deliverables
+### Implementation Summary
 
-- `pkg/roast/temporal.go` — Temporal pattern analysis (automated detection, work-hours)
-- `pkg/roast/enrich.go` — Enrichment data model (GreyNoise, JA4, KEV)
-- `pkg/roast/attribution.go` — Attribution profile synthesis (forensic narratives)
-- MCP: `oast_enrich_ip`, `oast_attribution_profile` tools
+- Temporal pattern analysis (`pkg/roast/temporal.go`): mean/stddev intervals, burst detection (<5s), quiet period detection (>1hr), automated likelihood scoring, active hours/days analysis, reasoning explanations
+- Enrichment data model (`pkg/roast/enrich.go`): GreyNoise (noise/RIOT/classification), JA4 fingerprints, KEV (CVE/vendor/product), source IP, ASN, tags
+- Attribution profile synthesis (`pkg/roast/attribution.go`): confidence scoring (low/medium/high), forensic narrative generation combining all signals (timezone, temporal, clusters, PIDs, gaps, enrichment)
+- MCP: `oast_attribution_profile` (batch forensic profiles), `oast_enrich_ip` (per-domain enrichment)
+- Markdown report: Temporal Analysis and Attribution Profiles sections in campaign reports
+- Tests: temporal (8 cases), enrich (6 cases), attribution (4+ cases)
+- CampaignAnalysis: wired 3rd order analytics into existing pipeline
 
 ### Decision Log
 
-_(pending implementation)_
+- **DEC-TEMPORAL-001**: Temporal Pattern Analysis
+  - Status: accepted
+  - Rationale: Inter-domain timing analysis reveals automated vs manual behavior. Regular intervals with low stddev indicate scripted scanning; irregular intervals spanning hours suggest manual testing; periodic bursts with quiet periods suggest scheduled jobs.
+  - Location: `pkg/roast/temporal.go`
+- **DEC-ENRICH-001**: Enrichment Data Model
+  - Status: accepted
+  - Rationale: Schema for external enrichment (GreyNoise, JA4, KEV) attached to DecodedOAST. This is the data model only; actual API calls happen via MCP tool composition.
+  - Location: `pkg/roast/enrich.go`
+- **DEC-ATTRIBUTION-001**: Attribution Profile Synthesis
+  - Status: accepted
+  - Rationale: Combines all forensic signals (timezone, temporal, clusters, PIDs, gaps, enrichment) into a human-readable narrative and confidence score for attribution.
+  - Location: `pkg/roast/attribution.go`
