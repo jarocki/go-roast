@@ -906,3 +906,138 @@ func handleOASTClusterMachines(args map[string]interface{}) (*mcp.CallToolResult
 
 	return mcp.NewToolResultText(string(data)), nil
 }
+
+func oastAttributionProfileTool() mcp.Tool {
+	return mcp.NewTool("oast_attribution_profile",
+		mcp.WithDescription("Build forensic attribution profiles from OAST domains (combines timezone, temporal, clustering signals)"),
+		mcp.WithString("domains",
+			mcp.Required(),
+			mcp.Description("Newline-separated list of OAST domains to analyze"),
+		),
+	)
+}
+
+func handleOASTAttributionProfile(args map[string]interface{}) (*mcp.CallToolResult, error) {
+	domainsRaw, ok := args["domains"]
+	if !ok {
+		return mcp.NewToolResultError("domains parameter required"), nil
+	}
+
+	domainsStr, ok := domainsRaw.(string)
+	if !ok {
+		return mcp.NewToolResultError("domains must be a string"), nil
+	}
+
+	// Split by newlines and decode each domain
+	lines := strings.Split(domainsStr, "\n")
+	var decoded []*roast.DecodedOAST
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		subdomain := line
+		if idx := strings.Index(line, "."); idx > 0 {
+			subdomain = line[:idx]
+		}
+
+		d, err := roast.Decode(subdomain)
+		if err == nil && d != nil {
+			decoded = append(decoded, d)
+		}
+	}
+
+	if len(decoded) == 0 {
+		return mcp.NewToolResultError("no valid OAST domains decoded"), nil
+	}
+
+	// Cluster by machine
+	clusters := roast.ClusterByMachine(decoded)
+
+	// Build attribution profiles for each cluster
+	var profiles []*roast.AttributionProfile
+	for _, cluster := range clusters {
+		// Filter domains for this machine
+		machineDomains := make([]*roast.DecodedOAST, 0)
+		for _, d := range decoded {
+			if d.Valid && d.MachineID == cluster.MachineID {
+				machineDomains = append(machineDomains, d)
+			}
+		}
+
+		// Temporal profile
+		temporal := roast.AnalyzeTemporalPatterns(machineDomains, cluster.TimezoneConsensus)
+
+		// Attribution profile (no enrichment in this path)
+		attribution := roast.BuildAttributionProfile(cluster, temporal, nil)
+		profiles = append(profiles, attribution)
+	}
+
+	data, err := json.MarshalIndent(profiles, "", "  ")
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to encode results: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(string(data)), nil
+}
+
+func oastEnrichIPTool() mcp.Tool {
+	return mcp.NewTool("oast_enrich_ip",
+		mcp.WithDescription("Enrich a decoded OAST domain with source IP and tags (GreyNoise/JA4/KEV data added via MCP composition)"),
+		mcp.WithString("domain",
+			mcp.Required(),
+			mcp.Description("OAST domain to enrich"),
+		),
+		mcp.WithString("source_ip",
+			mcp.Required(),
+			mcp.Description("Source IP address that generated the domain"),
+		),
+		mcp.WithString("tags",
+			mcp.Description("Comma-separated tags (e.g., 'nuclei-scanner,automated')"),
+		),
+	)
+}
+
+func handleOASTEnrichIP(args map[string]interface{}) (*mcp.CallToolResult, error) {
+	domain, ok := args["domain"].(string)
+	if !ok {
+		return mcp.NewToolResultError("domain must be a string"), nil
+	}
+
+	sourceIP, ok := args["source_ip"].(string)
+	if !ok {
+		return mcp.NewToolResultError("source_ip must be a string"), nil
+	}
+
+	// Decode the domain
+	decoded, err := roast.Decode(domain)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to decode domain: %v", err)), nil
+	}
+
+	// Create enrichment data
+	enrichment := &roast.EnrichmentData{
+		SourceIP: sourceIP,
+	}
+
+	// Parse tags if provided
+	if tagsRaw, ok := args["tags"].(string); ok && tagsRaw != "" {
+		tags := strings.Split(tagsRaw, ",")
+		for i := range tags {
+			tags[i] = strings.TrimSpace(tags[i])
+		}
+		enrichment.Tags = tags
+	}
+
+	// Attach enrichment to decoded domain
+	decoded.Enrichment = enrichment
+
+	data, err := json.MarshalIndent(decoded, "", "  ")
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to encode results: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(string(data)), nil
+}
