@@ -1,3 +1,11 @@
+// cmd/roast/main.go — CLI entrypoint for the roast tool.
+// Provides decode, extract, analyze, pipe, mcp, and serve subcommands.
+// Output formats: json (default), csv, table, markdown (analyze only).
+//
+// The analyze command supports CSV and table output via outputAnalysisCSV and
+// outputAnalysisTable, which flatten 2nd/3rd order analytics (machine clusters,
+// temporal profiles, attribution profiles, gap counts) into tabular form for
+// spreadsheet/DuckDB consumption.
 package main
 
 import (
@@ -577,6 +585,10 @@ func outputAnalysis(analysis *roast.CampaignAnalysis, format string, includeJSON
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(analysis)
+	case "csv":
+		return outputAnalysisCSV(analysis)
+	case "table":
+		return outputAnalysisTable(analysis)
 	case "markdown", "md":
 		opts := roast.MarkdownOptions{IncludeClusterDetails: includeCluster}
 		markdown := analysis.FormatMarkdownWithOptions(opts)
@@ -603,6 +615,311 @@ func outputAnalysis(analysis *roast.CampaignAnalysis, format string, includeJSON
 		fmt.Print(markdown)
 		return nil
 	}
+}
+
+// outputAnalysisCSV emits a CSV with one row per machine cluster, including all
+// analytics fields flattened: cluster metadata, temporal profile, attribution profile,
+// and gap counts. This mirrors the pattern from outputCSV for decoded results.
+//
+// @decision DEC-CLI-CSV-001
+// @title Analyze CSV Output — Machine-Cluster Rows
+// @status accepted
+// @rationale One row per machine cluster provides a tabular view suitable for
+//            spreadsheet analysis, DuckDB ingestion, and pipeline processing.
+//            All 2nd/3rd order analytics are flattened into columns so downstream
+//            consumers don't need to parse nested JSON.
+func outputAnalysisCSV(analysis *roast.CampaignAnalysis) error {
+	w := csv.NewWriter(os.Stdout)
+	defer w.Flush()
+
+	header := []string{
+		"machine_id",
+		"campaigns",
+		"pids",
+		"domain_count",
+		"first_seen",
+		"last_seen",
+		"duration",
+		"velocity_per_hour",
+		"counter_min",
+		"counter_max",
+		"timezone_offset",
+		"timezone_utc",
+		"timezone_confidence",
+		"mean_interval_secs",
+		"stddev_interval_secs",
+		"burst_count",
+		"quiet_periods",
+		"automated_likelihood",
+		"active_hours",
+		"active_days",
+		"attribution_confidence",
+		"attribution_narrative",
+		"counter_gaps_count",
+		"total_missing_domains",
+	}
+
+	if err := w.Write(header); err != nil {
+		return err
+	}
+
+	// Build lookup maps for temporal and attribution profiles by machine ID
+	temporalByMachine := make(map[string]*roast.TemporalProfile)
+	for _, tp := range analysis.TemporalProfiles {
+		if tp != nil {
+			temporalByMachine[tp.MachineID] = tp
+		}
+	}
+
+	attributionByMachine := make(map[string]*roast.AttributionProfile)
+	for _, ap := range analysis.AttributionProfiles {
+		if ap != nil {
+			attributionByMachine[ap.MachineID] = ap
+		}
+	}
+
+	// Build per-machine gap counts
+	gapCountByMachine := make(map[string]int)
+	var totalMissingByMachine map[string]uint32
+	if analysis.GapAnalysis != nil {
+		totalMissingByMachine = make(map[string]uint32)
+		gapCountByMachine = analysis.GapAnalysis.PerMachineGaps
+		// Accumulate missing counts per machine
+		for _, gap := range analysis.GapAnalysis.Gaps {
+			totalMissingByMachine[gap.MachineID] += gap.GapSize
+		}
+	}
+
+	// Emit one row per machine cluster
+	for _, cluster := range analysis.MachineClusters {
+		mid := cluster.MachineID
+
+		// Timezone fields
+		tzOffset, tzUTC, tzConf := "", "", ""
+		if cluster.TimezoneConsensus != nil {
+			tzOffset = fmt.Sprintf("%d", cluster.TimezoneConsensus.OffsetSeconds)
+			tzUTC = cluster.TimezoneConsensus.UTCDesignation
+			tzConf = cluster.TimezoneConsensus.Confidence
+		}
+
+		// Temporal fields
+		meanInterval, stddevInterval, burstCount, quietPeriods, automatedLikelihood := "", "", "", "", ""
+		activeHours, activeDays := "", ""
+		if tp, ok := temporalByMachine[mid]; ok {
+			meanInterval = fmt.Sprintf("%.2f", tp.MeanIntervalSecs)
+			stddevInterval = fmt.Sprintf("%.2f", tp.StdDevIntervalSecs)
+			burstCount = fmt.Sprintf("%d", tp.BurstCount)
+			quietPeriods = fmt.Sprintf("%d", tp.QuietPeriods)
+			automatedLikelihood = tp.AutomatedLikelihood
+
+			// Active hours as space-separated ints
+			if len(tp.ActiveHours) > 0 {
+				hourStrs := make([]string, len(tp.ActiveHours))
+				for i, h := range tp.ActiveHours {
+					hourStrs[i] = fmt.Sprintf("%d", h)
+				}
+				activeHours = strings.Join(hourStrs, " ")
+			}
+			if len(tp.ActiveDays) > 0 {
+				activeDays = strings.Join(tp.ActiveDays, " ")
+			}
+		}
+
+		// Attribution fields
+		attrConf, attrNarrative := "", ""
+		if ap, ok := attributionByMachine[mid]; ok {
+			attrConf = ap.OverallConfidence
+			attrNarrative = ap.Narrative
+		}
+
+		// Gap fields
+		gapCount := ""
+		missingDomains := ""
+		if gapCountByMachine != nil {
+			gapCount = fmt.Sprintf("%d", gapCountByMachine[mid])
+		}
+		if totalMissingByMachine != nil {
+			missingDomains = fmt.Sprintf("%d", totalMissingByMachine[mid])
+		}
+
+		// PID list
+		pidStrs := make([]string, len(cluster.PIDs))
+		for i, pid := range cluster.PIDs {
+			pidStrs[i] = fmt.Sprintf("%d", pid)
+		}
+
+		row := []string{
+			mid,
+			strings.Join(cluster.Campaigns, " "),
+			strings.Join(pidStrs, " "),
+			fmt.Sprintf("%d", cluster.DomainCount),
+			cluster.FirstSeen.Format("2006-01-02 15:04:05"),
+			cluster.LastSeen.Format("2006-01-02 15:04:05"),
+			cluster.Duration,
+			fmt.Sprintf("%.2f", cluster.Velocity),
+			fmt.Sprintf("%d", cluster.CounterRange[0]),
+			fmt.Sprintf("%d", cluster.CounterRange[1]),
+			tzOffset,
+			tzUTC,
+			tzConf,
+			meanInterval,
+			stddevInterval,
+			burstCount,
+			quietPeriods,
+			automatedLikelihood,
+			activeHours,
+			activeDays,
+			attrConf,
+			attrNarrative,
+			gapCount,
+			missingDomains,
+		}
+
+		if err := w.Write(row); err != nil {
+			return err
+		}
+	}
+
+	// If no machine clusters, emit a summary row
+	if len(analysis.MachineClusters) == 0 {
+		summaryRow := []string{
+			"(summary)", "", "", fmt.Sprintf("%d", analysis.ValidDomains),
+			analysis.FirstSeen.Format("2006-01-02 15:04:05"),
+			analysis.LastSeen.Format("2006-01-02 15:04:05"),
+			analysis.TimeSpan, "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
+		}
+		if err := w.Write(summaryRow); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// outputAnalysisTable renders a compact summary table of machine clusters for the
+// analyze command. Follows the same pattern as outputTable for decoded results.
+//
+// @decision DEC-CLI-TABLE-001
+// @title Analyze Table Output — Machine Summary Table
+// @status accepted
+// @rationale A compact terminal table gives operators a quick overview without
+//            requiring JSON parsing. Key columns (machine, domains, campaigns,
+//            PIDs, timezone, automated likelihood, confidence) are the most
+//            actionable forensic signals at a glance.
+func outputAnalysisTable(analysis *roast.CampaignAnalysis) error {
+	// Print overall summary header
+	fmt.Printf("Analysis: %d domains | %d valid | %d campaigns | %d machines\n",
+		analysis.TotalDomains, analysis.ValidDomains, analysis.UniqueCampaigns, analysis.UniqueMachines)
+	if analysis.TimeSpan != "" {
+		fmt.Printf("Span: %s\n", analysis.TimeSpan)
+	}
+	if analysis.ExecutiveSummary != "" {
+		fmt.Printf("Summary: %s\n", analysis.ExecutiveSummary)
+	}
+	fmt.Println()
+
+	if len(analysis.MachineClusters) == 0 {
+		fmt.Println("No machine clusters computed.")
+		return nil
+	}
+
+	// Build lookup maps
+	temporalByMachine := make(map[string]*roast.TemporalProfile)
+	for _, tp := range analysis.TemporalProfiles {
+		if tp != nil {
+			temporalByMachine[tp.MachineID] = tp
+		}
+	}
+	attributionByMachine := make(map[string]*roast.AttributionProfile)
+	for _, ap := range analysis.AttributionProfiles {
+		if ap != nil {
+			attributionByMachine[ap.MachineID] = ap
+		}
+	}
+
+	// Table header
+	fmt.Printf("%-14s %-8s %-12s %-6s %-10s %-10s %-12s\n",
+		"Machine", "Domains", "Campaigns", "PIDs", "Timezone", "Automated", "Confidence")
+	fmt.Println(strings.Repeat("-", 80))
+
+	for _, cluster := range analysis.MachineClusters {
+		mid := cluster.MachineID
+
+		campaigns := strings.Join(cluster.Campaigns, ",")
+		pidStrs := make([]string, len(cluster.PIDs))
+		for i, pid := range cluster.PIDs {
+			pidStrs[i] = fmt.Sprintf("%d", pid)
+		}
+		pids := strings.Join(pidStrs, ",")
+
+		tzStr := "unknown"
+		if cluster.TimezoneConsensus != nil {
+			tzStr = cluster.TimezoneConsensus.UTCDesignation
+		}
+
+		automatedStr := "-"
+		if tp, ok := temporalByMachine[mid]; ok && tp.AutomatedLikelihood != "" {
+			automatedStr = tp.AutomatedLikelihood
+		}
+
+		confStr := "-"
+		if ap, ok := attributionByMachine[mid]; ok && ap.OverallConfidence != "" {
+			confStr = ap.OverallConfidence
+		}
+
+		fmt.Printf("%-14s %-8d %-12s %-6s %-10s %-10s %-12s\n",
+			truncate(mid, 14),
+			cluster.DomainCount,
+			truncate(campaigns, 12),
+			truncate(pids, 6),
+			truncate(tzStr, 10),
+			automatedStr,
+			confStr,
+		)
+	}
+
+	// Temporal profiles detail section
+	if len(analysis.TemporalProfiles) > 0 {
+		fmt.Println()
+		fmt.Println("Temporal Profiles:")
+		fmt.Printf("  %-14s %-12s %-12s %-8s %-8s %s\n",
+			"Machine", "MeanInterval", "StdDev", "Bursts", "Quiet", "Automated")
+		fmt.Println("  " + strings.Repeat("-", 70))
+		for _, tp := range analysis.TemporalProfiles {
+			if tp == nil {
+				continue
+			}
+			fmt.Printf("  %-14s %-12.1f %-12.1f %-8d %-8d %s\n",
+				truncate(tp.MachineID, 14),
+				tp.MeanIntervalSecs,
+				tp.StdDevIntervalSecs,
+				tp.BurstCount,
+				tp.QuietPeriods,
+				tp.AutomatedLikelihood,
+			)
+		}
+	}
+
+	// Gap analysis summary
+	if analysis.GapAnalysis != nil && analysis.GapAnalysis.TotalGaps > 0 {
+		fmt.Println()
+		fmt.Printf("Counter Gaps: %d gaps, %d missing domains\n",
+			analysis.GapAnalysis.TotalGaps, analysis.GapAnalysis.MissingDomains)
+	}
+
+	// Attribution narratives
+	if len(analysis.AttributionProfiles) > 0 {
+		fmt.Println()
+		fmt.Println("Attribution Profiles:")
+		for _, ap := range analysis.AttributionProfiles {
+			if ap == nil {
+				continue
+			}
+			fmt.Printf("  [%s] %s: %s\n", ap.OverallConfidence, truncate(ap.MachineID, 14), ap.Narrative)
+		}
+	}
+
+	return nil
 }
 
 // parseTimestampedFile reads a CSV/TSV file with log_timestamp,domain format
