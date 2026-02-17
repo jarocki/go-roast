@@ -19,6 +19,7 @@ type DecodedOAST struct {
 	NonceCounter   *uint32            `json:"nonce_counter,omitempty"`      // Promoted from NonceAnalysis when reliable
 	LogTimestamp   *time.Time         `json:"log_timestamp,omitempty"`      // UTC timestamp from DNS/web logs
 	TimezoneEstimate *TimezoneEstimate `json:"timezone_estimate,omitempty"` // Timezone offset estimate
+	Enrichment       *EnrichmentData   `json:"enrichment,omitempty"`        // External enrichment data (GreyNoise, JA4, KEV)
 }
 
 // OASTMatch represents an extracted OAST domain from text

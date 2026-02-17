@@ -53,6 +53,9 @@ type CampaignAnalysis struct {
 	MachineClusters   []MachineCluster          `json:"machine_clusters,omitempty"`
 	GapAnalysis       *GapAnalysis              `json:"gap_analysis,omitempty"`
 	PIDSessions       []PIDSession              `json:"pid_sessions,omitempty"`
+	// 3rd order analytics
+	TemporalProfiles    []*TemporalProfile    `json:"temporal_profiles,omitempty"`
+	AttributionProfiles []*AttributionProfile `json:"attribution_profiles,omitempty"`
 }
 
 // AnalyzeCampaignFromFile analyzes OAST domains from a file and returns campaign statistics
@@ -305,6 +308,25 @@ func analyzeCampaign(matches []OASTMatch, decoded []*DecodedOAST) *CampaignAnaly
 	analysis.MachineClusters = ClusterByMachine(decoded)
 	analysis.GapAnalysis = AnalyzeCounterGaps(decoded)
 	analysis.PIDSessions = AnalyzePIDLifecycles(decoded)
+
+	// Compute 3rd order analytics
+	for _, cluster := range analysis.MachineClusters {
+		// Filter domains for this machine
+		machineDomains := make([]*DecodedOAST, 0)
+		for _, d := range decoded {
+			if d.Valid && d.MachineID == cluster.MachineID {
+				machineDomains = append(machineDomains, d)
+			}
+		}
+
+		// Temporal profile
+		temporal := AnalyzeTemporalPatterns(machineDomains, cluster.TimezoneConsensus)
+		analysis.TemporalProfiles = append(analysis.TemporalProfiles, temporal)
+
+		// Attribution profile (no enrichment data in this path)
+		attribution := BuildAttributionProfile(cluster, temporal, nil)
+		analysis.AttributionProfiles = append(analysis.AttributionProfiles, attribution)
+	}
 
 	return analysis
 }
@@ -663,6 +685,42 @@ func (a *CampaignAnalysis) FormatMarkdownWithOptions(opts MarkdownOptions) strin
 		}
 	}
 
+	// 3rd Order Analytics sections
+	if len(a.TemporalProfiles) > 0 {
+		sb.WriteString("\n## Temporal Analysis\n\n")
+		for _, tp := range a.TemporalProfiles {
+			sb.WriteString(fmt.Sprintf("### Machine `%s`\n\n", tp.MachineID))
+			sb.WriteString(fmt.Sprintf("- **Mean Interval**: %.1fs (σ=%.1fs)\n", tp.MeanIntervalSecs, tp.StdDevIntervalSecs))
+			sb.WriteString(fmt.Sprintf("- **Bursts**: %d (< 5s apart)\n", tp.BurstCount))
+			sb.WriteString(fmt.Sprintf("- **Quiet Periods**: %d (> 1hr)\n", tp.QuietPeriods))
+			sb.WriteString(fmt.Sprintf("- **Automated Likelihood**: %s\n", tp.AutomatedLikelihood))
+
+			if len(tp.ActiveHours) > 0 {
+				sb.WriteString(fmt.Sprintf("- **Active Hours**: %s (local time)\n", formatHourRange(tp.ActiveHours)))
+			}
+			if len(tp.ActiveDays) > 0 {
+				sb.WriteString(fmt.Sprintf("- **Active Days**: %s\n", strings.Join(tp.ActiveDays, ", ")))
+			}
+
+			if len(tp.Reasoning) > 0 {
+				sb.WriteString("- **Analysis**:\n")
+				for _, reason := range tp.Reasoning {
+					sb.WriteString(fmt.Sprintf("  - %s\n", reason))
+				}
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	if len(a.AttributionProfiles) > 0 {
+		sb.WriteString("\n## Attribution Profiles\n\n")
+		for _, ap := range a.AttributionProfiles {
+			sb.WriteString(fmt.Sprintf("### Machine `%s`\n\n", ap.MachineID))
+			sb.WriteString(fmt.Sprintf("**Confidence**: %s\n\n", ap.OverallConfidence))
+			sb.WriteString(ap.Narrative + "\n\n")
+		}
+	}
+
 	// 2nd Order Analytics sections (controlled by IncludeClusterDetails flag)
 	if opts.IncludeClusterDetails {
 		// Machine Clustering section
@@ -802,4 +860,15 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%.1f weeks", days/7)
 	}
 	return fmt.Sprintf("%.1f months", days/30)
+}
+
+func formatHourRange(hours []int) string {
+	if len(hours) == 0 {
+		return ""
+	}
+	if len(hours) == 1 {
+		return fmt.Sprintf("%02d:00", hours[0])
+	}
+	// Show range
+	return fmt.Sprintf("%02d:00-%02d:00", hours[0], hours[len(hours)-1])
 }
