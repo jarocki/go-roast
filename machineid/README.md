@@ -161,6 +161,7 @@ comparison of presentation claims against verified source code findings.
 | 22 | z-base-32 `y` = 0, producing `yyy` runs in v1.0.1 nonces | Confirmed: z-base-32 alphabet starts with `y` mapping to 0 |
 | 22 | v1.0.2 (2022-03-20) fixed the nonce to use random bytes | Confirmed: commit `0166128` switched to `crypto/rand` |
 | 22 | Web client uses z-base-32 for both preamble and nonce | Confirmed: web client JavaScript uses z-base-32 throughout |
+| 37 | "The timestamp is relative to the timezone setting of the interactsh client" | Confirmed: XID encodes `time.Now().Unix()` which uses the client's local wall clock, not UTC |
 
 ### Missing from Presentation
 
@@ -173,7 +174,7 @@ forensic analysis:
 | **Exact xid version mapping** | No mapping of interactsh versions to xid versions | Without this, analysts can't determine which hash algorithm produced a given MID |
 | **`XID_MACHINE_ID` env var** | Not mentioned (added May 2025, after the presentation) | Operators can now spoof their MID by setting this environment variable, undermining machine correlation |
 | **Linux fallback path** | `/sys/class/dmi/id/product_uuid` as secondary source on Linux | In containerized environments where `/etc/machine-id` may be absent, the DMI UUID is used instead |
-| **Timestamp is local clock** | Presentation notes timestamps but doesn't explicitly state they encode the **local wall clock** (not UTC) | This is the key insight enabling timezone estimation — the delta between XID timestamp and DNS log timestamp reveals the client's UTC offset |
+| **Automated timezone estimation at scale** | Presentation demonstrates the differential technique (GA cookie vs XID timestamp, slide 36) and notes timestamps are local (slide 37), but doesn't formalize it as a systematic pipeline for bulk timezone estimation across campaigns | Roast's `EstimateTimezone()` and `ConsensusTimezone()` automate this across many domains with confidence scoring |
 | **Counter initialization** | Counter is seeded from `crypto/rand`, not started at 0 | Important for counter gap analysis — the first domain from a process won't have counter=0 (unlike v1.0.1 nonces) |
 | **PID truncation** | PID is stored as `os.Getpid() % 65536` (2 bytes) | On Linux with high PIDs (>65535), different processes can produce the same PID field |
 
@@ -197,9 +198,11 @@ source code analysis alone reveals:
 - **Custom alphabet detection** (slides 27-28): Some MASEPIE domains don't match
   any known base32 variant, suggesting APT28 used modified or custom tooling.
 
-- **Nonce timestamp correlation** (slide 36): The web client screenshot from the
-  interactsh documentation contained a GA cookie whose timestamp corroborated the
-  XID timestamp, providing independent verification of the CID decode.
+- **Differential time analysis** (slides 36-37): Demonstrated the core technique —
+  comparing an external timestamp (GA cookie) against the XID-encoded timestamp to
+  corroborate the decode and reveal timezone context. Combined with the explicit
+  note that "the timestamp is relative to the timezone setting of the interactsh
+  client," this establishes the foundation for timezone estimation.
 
 ---
 
