@@ -24,7 +24,7 @@ Every Interactsh correlation ID (CID) is a 12-byte XID encoded in base32hex (20 
 | Counter     | 3     | 9      | Atomically incremented from random seed  |
 
 The timestamp encodes the client's **local wall clock**, not UTC. This is the basis
-for the timezone estimation technique described in [JAGS's LABScon 2024 research](https://github.com/topics/snl-cyber-sec).
+for the timezone estimation technique described in [John Jarocki's LABScon 2024 research](https://github.com/topics/snl-cyber-sec).
 
 ---
 
@@ -268,4 +268,4 @@ Given an OAST domain, determine which hash was used:
 - [xid v1.5.0 release](https://github.com/rs/xid/releases/tag/v1.5.0) — MD5 → SHA-256 commit
 - [interactsh commit 0166128](https://github.com/projectdiscovery/interactsh/commit/0166128e3a382c6b08b002e2d4343fa8a9a48a96) — v1.0.2 nonce randomization
 - [z-base-32 paper](https://philzimmermann.com/docs/human-oriented-base-32-encoding.txt) — Zooko O'Wheilacronx's encoding spec
-- LABScon 2024: "Tracking the Cyberspace Ghost from OAST to OAST" — Juan Andres Guerrero-Saade (JAGS) & John Jarocki
+- LABScon 2024: "Tracking the Cyberspace Ghost from OAST to OAST" — John Jarocki
