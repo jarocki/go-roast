@@ -21,7 +21,15 @@
 
 <div class="tab-content active" id="tab-paste">
   <textarea id="domain-input" placeholder="Paste OAST domains or text containing domains (one per line)..." rows="6"></textarea>
-  <input type="text" id="log-timestamp" placeholder="Log Timestamp (UTC, RFC3339 format, e.g., 2025-02-15T21:00:00Z) - optional for timezone estimation">
+  <div class="ts-input-group">
+    <label for="log-timestamp" class="ts-label">Log Timestamp (UTC, optional — for timezone estimation)</label>
+    <div class="ts-controls">
+      <input type="datetime-local" id="log-timestamp" step="1">
+      <button type="button" id="ts-now-btn" title="Set to current UTC time">Now</button>
+      <button type="button" id="ts-clear-btn" title="Clear">&#x2715;</button>
+    </div>
+    <span id="ts-autodetect-notice" class="ts-autodetect-notice" hidden></span>
+  </div>
 </div>
 
 <div class="tab-content" id="tab-upload">

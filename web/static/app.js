@@ -5,27 +5,63 @@
 //
 // @decision: Vanilla JS over a framework because the UI is a single page with
 // ~4 interactions. A framework would add build complexity for negligible benefit.
+//
+// @decision DEC-UI-001
+// @title Event delegation on resultsContainer for all dynamic table interactions
+// @status accepted
+// @rationale Table rows are replaced on every render. Attaching listeners
+// directly to rows would leak memory and require re-wiring after every render.
+// A single delegated listener on the stable resultsContainer parent handles
+// accordion toggles, sort header clicks, group collapse, filter input, and
+// group-by select regardless of how many times the table is re-rendered.
+//
+// @decision DEC-UI-002
+// @title Module-level state for filter/sort/group coordination
+// @status accepted
+// @rationale originalResults, currentResults, sortState, currentFilter, and
+// currentGroupBy are stored at module scope so applyFilterSortGroup() can
+// coordinate them without threading state through every render function call.
+//
+// @decision DEC-UI-003
+// @title datetime-local + Z suffix for RFC3339 UTC timestamp
+// @status accepted
+// @rationale The datetime-local input stores a naive local time string with no
+// timezone. Appending Z on submit is the correct interpretation as UTC for the
+// backend. The Now button uses UTC fields of the Date object to produce the
+// correct UTC time string regardless of the user's local timezone.
 
 (function() {
   'use strict';
 
-  // DOM refs
-  const domainInput = document.getElementById('domain-input');
+  // ── DOM refs ──────────────────────────────────────────────────────────────
+
+  const domainInput       = document.getElementById('domain-input');
   const logTimestampInput = document.getElementById('log-timestamp');
-  const actionSelect = document.getElementById('action-select');
-  const submitBtn = document.getElementById('submit-btn');
-  const resultsSection = document.getElementById('results-section');
-  const resultsContainer = document.getElementById('results-container');
-  const dropZone = document.getElementById('drop-zone');
-  const fileInput = document.getElementById('file-input');
-  const tabs = document.querySelectorAll('.tab');
-  const tabContents = document.querySelectorAll('.tab-content');
+  const tsNowBtn          = document.getElementById('ts-now-btn');
+  const tsClearBtn        = document.getElementById('ts-clear-btn');
+  const tsNoticeEl        = document.getElementById('ts-autodetect-notice');
+  const actionSelect      = document.getElementById('action-select');
+  const submitBtn         = document.getElementById('submit-btn');
+  const resultsSection    = document.getElementById('results-section');
+  const resultsContainer  = document.getElementById('results-container');
+  const dropZone          = document.getElementById('drop-zone');
+  const fileInput         = document.getElementById('file-input');
+  const tabs              = document.querySelectorAll('.tab');
+  const tabContents       = document.querySelectorAll('.tab-content');
 
-  // Last result storage for CSV export
-  let lastResultData = null;
-  let lastResultAction = null;
+  // ── Module-level state ────────────────────────────────────────────────────
 
-  // Tab switching
+  let lastResultData       = null;
+  let lastResultAction     = null;
+  let sortState            = { col: null, dir: null };
+  let originalResults      = [];
+  let currentResults       = [];
+  let currentFilter        = '';
+  let currentGroupBy       = '';
+  let tsNoticeDismissTimer = null;
+
+  // ── Tab switching ─────────────────────────────────────────────────────────
+
   tabs.forEach(tab => {
     tab.addEventListener('click', () => {
       tabs.forEach(t => t.classList.remove('active'));
@@ -35,7 +71,8 @@
     });
   });
 
-  // Drag and drop
+  // ── Drag and drop ─────────────────────────────────────────────────────────
+
   dropZone.addEventListener('dragover', e => {
     e.preventDefault();
     dropZone.classList.add('dragover');
@@ -64,15 +101,139 @@
     fileInput.click();
   });
 
+  // ── Timestamp helpers ─────────────────────────────────────────────────────
+
+  // toDatetimeLocalString converts a Date to YYYY-MM-DDTHH:mm:ss using UTC
+  // fields. Used to populate the datetime-local input, which expects no Z suffix.
+  function toDatetimeLocalString(date) {
+    const pad = n => String(n).padStart(2, '0');
+    return date.getUTCFullYear() + '-'
+      + pad(date.getUTCMonth() + 1) + '-'
+      + pad(date.getUTCDate()) + 'T'
+      + pad(date.getUTCHours()) + ':'
+      + pad(date.getUTCMinutes()) + ':'
+      + pad(date.getUTCSeconds());
+  }
+
+  // detectTimestampFromText inspects arbitrary log text and returns a
+  // datetime-local format string (YYYY-MM-DDTHH:mm:ss, UTC) or null if nothing
+  // recognisable is found. Patterns tried in priority order:
+  //   1. ISO 8601:   2025-02-15T21:00:00 or 2025-02-15 21:00:00
+  //   2. Zeek epoch: 1700000000.123456 at the start of a line
+  //   3. Apache/nginx: [15/Feb/2025:21:00:00 +0000]
+  //   4. Syslog:     Feb 15 21:00:00 (assume current UTC year)
+  function detectTimestampFromText(text) {
+    // 1. ISO 8601
+    const isoMatch = text.match(/(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})/);
+    if (isoMatch) {
+      return isoMatch[1] + 'T' + isoMatch[2];
+    }
+
+    // 2. Zeek epoch float (epoch 1500000000+ covers 2017 onward)
+    const zeekMatch = text.match(/(?:^|\n)(1[5-9]\d{8}\.\d+)/m);
+    if (zeekMatch) {
+      const epoch = parseFloat(zeekMatch[1]);
+      if (!isNaN(epoch)) {
+        return toDatetimeLocalString(new Date(epoch * 1000));
+      }
+    }
+
+    // 3. Apache/nginx combined log: [15/Feb/2025:21:00:00 +0000]
+    const apacheMatch = text.match(/\[(\d{2})\/(\w{3})\/(\d{4}):(\d{2}:\d{2}:\d{2})\s[+-]\d{4}\]/);
+    if (apacheMatch) {
+      const months = { Jan:0, Feb:1, Mar:2, Apr:3, May:4, Jun:5,
+                       Jul:6, Aug:7, Sep:8, Oct:9, Nov:10, Dec:11 };
+      const month = months[apacheMatch[2]];
+      if (month !== undefined) {
+        const d = new Date(Date.UTC(
+          parseInt(apacheMatch[3], 10), month,
+          parseInt(apacheMatch[1], 10),
+          parseInt(apacheMatch[4].slice(0, 2), 10),
+          parseInt(apacheMatch[4].slice(3, 5), 10),
+          parseInt(apacheMatch[4].slice(6, 8), 10)
+        ));
+        return toDatetimeLocalString(d);
+      }
+    }
+
+    // 4. Syslog: Feb 15 21:00:00 (current UTC year assumed)
+    const syslogMatch = text.match(/^(\w{3})\s+(\d{1,2})\s+(\d{2}:\d{2}:\d{2})/m);
+    if (syslogMatch) {
+      const months = { Jan:0, Feb:1, Mar:2, Apr:3, May:4, Jun:5,
+                       Jul:6, Aug:7, Sep:8, Oct:9, Nov:10, Dec:11 };
+      const month = months[syslogMatch[1]];
+      if (month !== undefined) {
+        const now = new Date();
+        const d = new Date(Date.UTC(
+          now.getUTCFullYear(), month,
+          parseInt(syslogMatch[2], 10),
+          parseInt(syslogMatch[3].slice(0, 2), 10),
+          parseInt(syslogMatch[3].slice(3, 5), 10),
+          parseInt(syslogMatch[3].slice(6, 8), 10)
+        ));
+        return toDatetimeLocalString(d);
+      }
+    }
+
+    return null;
+  }
+
+  // showTsNotice displays a transient notice in the ts-autodetect-notice span
+  // and auto-dismisses after 3 seconds.
+  function showTsNotice(msg) {
+    if (tsNoticeDismissTimer) clearTimeout(tsNoticeDismissTimer);
+    tsNoticeEl.textContent = msg;
+    tsNoticeEl.hidden = false;
+    tsNoticeDismissTimer = setTimeout(function() {
+      tsNoticeEl.hidden = true;
+      tsNoticeEl.textContent = '';
+      tsNoticeDismissTimer = null;
+    }, 3000);
+  }
+
+  // "Now" button — fills datetime-local with current UTC time
+  tsNowBtn.addEventListener('click', function() {
+    logTimestampInput.value = toDatetimeLocalString(new Date());
+  });
+
+  // "Clear" button — empties the field and cancels any pending notice
+  tsClearBtn.addEventListener('click', function() {
+    logTimestampInput.value = '';
+    tsNoticeEl.hidden = true;
+    if (tsNoticeDismissTimer) {
+      clearTimeout(tsNoticeDismissTimer);
+      tsNoticeDismissTimer = null;
+    }
+  });
+
+  // Auto-detect timestamp when user pastes/types in the domain textarea
+  domainInput.addEventListener('input', function() {
+    if (logTimestampInput.value) return; // only fill when empty
+    const detected = detectTimestampFromText(domainInput.value);
+    if (detected) {
+      logTimestampInput.value = detected;
+      showTsNotice('Timestamp auto-detected from log text');
+    }
+  });
+
+  // ── File processing ───────────────────────────────────────────────────────
+
   function processFile(file) {
     const reader = new FileReader();
     reader.onload = function(e) {
       const text = e.target.result;
-      // Try to extract domains from CSV columns
       const domains = extractDomainsFromCSV(text);
       domainInput.value = domains.join('\n');
       // Switch to paste tab to show loaded content
       tabs[0].click();
+      // Auto-detect timestamp from file contents if field is empty
+      if (!logTimestampInput.value) {
+        const detected = detectTimestampFromText(text);
+        if (detected) {
+          logTimestampInput.value = detected;
+          showTsNotice('Timestamp auto-detected from file');
+        }
+      }
     };
     reader.readAsText(file);
   }
@@ -91,7 +252,8 @@
     return Array.from(domains);
   }
 
-  // Submit
+  // ── Submit ────────────────────────────────────────────────────────────────
+
   submitBtn.addEventListener('click', async () => {
     const input = domainInput.value.trim();
     if (!input) return;
@@ -103,10 +265,11 @@
     try {
       const requestBody = { input: input };
 
-      // Include log_timestamp if provided
+      // Include log_timestamp if provided. Append Z to the datetime-local value
+      // to produce a valid RFC3339 UTC timestamp for the backend (DEC-UI-003).
       const logTimestamp = logTimestampInput.value.trim();
       if (logTimestamp) {
-        requestBody.log_timestamp = logTimestamp;
+        requestBody.log_timestamp = logTimestamp + 'Z';
       }
 
       const resp = await fetch('/api/' + action, {
@@ -157,7 +320,10 @@
     }
   }
 
-  // Download bar with Save CSV (and optionally Download Report) buttons
+  // ── Download bar ──────────────────────────────────────────────────────────
+
+  // renderDownloadBar creates the Save CSV (and Download Report) buttons,
+  // clears resultsContainer, and wires click handlers.
   function renderDownloadBar(action) {
     let html = '<div class="download-bar">';
     html += '<button class="download-csv-btn" onclick="return false;">Save CSV</button>';
@@ -171,78 +337,412 @@
     resultsContainer.innerHTML = '';
     resultsContainer.appendChild(bar.firstChild);
 
-    // Wire up CSV button
     const csvBtn = resultsContainer.querySelector('.download-csv-btn');
     if (csvBtn) {
       csvBtn.addEventListener('click', function() { downloadCSV(action); });
     }
 
-    // Wire up Report button for analyze
     const reportBtn = resultsContainer.querySelector('.download-report-btn');
     if (reportBtn) {
       reportBtn.addEventListener('click', function() { downloadMarkdownReport(); });
     }
   }
 
+  // ── Decode results ────────────────────────────────────────────────────────
+
+  // renderDecodeResults is the entry point for decode/extract results.
+  // Resets module state, then delegates to toolbar + table renders.
   function renderDecodeResults(results) {
     if (!Array.isArray(results) || results.length === 0) {
       resultsContainer.innerHTML = '<p>No results</p>';
       return;
     }
 
+    originalResults = results;
+    currentResults  = results.slice();
+    currentFilter   = '';
+    currentGroupBy  = '';
+    sortState       = { col: null, dir: null };
+
     renderDownloadBar('decode');
+    renderDecodeToolbar();
+    renderDecodeTable(currentResults);
+  }
 
-    let html = '<table class="results-table"><thead><tr>';
-    html += '<th>Original</th><th>Valid</th><th>Client</th><th>Version</th>';
-    html += '<th>Conf</th><th>Timestamp</th><th>Machine</th><th>PID</th>';
-    html += '<th>Counter</th><th>Nonce</th>';
-    html += '</tr></thead><tbody>';
+  // renderDecodeToolbar appends the filter input, count span, and group-by
+  // select to resultsContainer.
+  function renderDecodeToolbar() {
+    const toolbar = document.createElement('div');
+    toolbar.className = 'table-toolbar';
+    toolbar.id = 'decode-toolbar';
+    toolbar.innerHTML =
+      '<input class="table-filter" id="decode-filter" placeholder="Filter rows...">' +
+      '<span class="filter-count" id="decode-filter-count"></span>' +
+      '<select id="decode-groupby" class="groupby-select">' +
+        '<option value="">No Grouping</option>' +
+        '<option value="machine_id">Machine ID</option>' +
+        '<option value="campaign">Campaign</option>' +
+        '<option value="client_type">Client Type</option>' +
+        '<option value="server_version">Server Version</option>' +
+      '</select>';
+    resultsContainer.appendChild(toolbar);
+    updateFilterCount(originalResults.length, originalResults.length);
+  }
 
-    for (const r of results) {
-      const c = r.classification || {};
-      html += '<tr>';
-      html += '<td>' + escapeHtml(truncate(r.original, 35)) + '</td>';
-      html += '<td>' + (r.valid ? 'Y' : 'N') + '</td>';
-      html += '<td>' + clientBadge(c.client_type) + '</td>';
-      html += '<td>' + versionBadge(c.server_version) + '</td>';
-      html += '<td>' + confBadge(c.confidence) + '</td>';
-      html += '<td>' + (r.valid ? formatTimestamp(r.timestamp) : '') + '</td>';
-      html += '<td>' + escapeHtml(r.machine_id || '') + '</td>';
-      html += '<td>' + (r.pid || '') + '</td>';
-      html += '<td>' + (r.counter || '') + '</td>';
-      html += '<td>' + escapeHtml(r.nonce || '') + '</td>';
-      html += '</tr>';
+  // renderDecodeTable creates or replaces the results-table element.
+  // Column order (13 total):
+  //   toggle | Original | Valid | Client | Version | Conf |
+  //   Timestamp | Machine | PID | Counter | Nonce | Nonce TS | Nonce #
+  function renderDecodeTable(results) {
+    const colCount = 13;
 
-      // Nonce analysis row
-      if (c.nonce_analysis) {
-        const na = c.nonce_analysis;
-        html += '<tr><td colspan="10" class="nonce-detail">';
-        html += 'Nonce: ts=' + formatTimestamp(na.nonce_timestamp);
-        html += ' counter=' + na.nonce_counter;
-        html += ' session_age=' + escapeHtml(na.session_age || '');
-        if (na.commentary && na.commentary.length > 0) {
-          html += '<br>' + na.commentary.map(escapeHtml).join('<br>');
+    const existing = resultsContainer.querySelector('.results-table');
+    if (existing) existing.remove();
+
+    const table = document.createElement('table');
+    table.className = 'results-table';
+
+    // thead
+    const headerCols = [
+      { label: '',          key: null },
+      { label: 'Original',  key: 'original' },
+      { label: 'Valid',     key: 'valid' },
+      { label: 'Client',    key: 'client_type' },
+      { label: 'Version',   key: 'server_version' },
+      { label: 'Conf',      key: 'confidence' },
+      { label: 'Timestamp', key: 'timestamp' },
+      { label: 'Machine',   key: 'machine_id' },
+      { label: 'PID',       key: 'pid' },
+      { label: 'Counter',   key: 'counter' },
+      { label: 'Nonce',     key: 'nonce' },
+      { label: 'Nonce TS',  key: 'nonce_ts' },
+      { label: 'Nonce #',   key: 'nonce_counter' }
+    ];
+
+    const thead = document.createElement('thead');
+    const headerRow = document.createElement('tr');
+    for (const col of headerCols) {
+      const th = document.createElement('th');
+      th.textContent = col.label;
+      if (col.key) {
+        th.dataset.sortCol = col.key;
+        if (sortState.col === col.key) {
+          th.dataset.sortDir = sortState.dir;
         }
-        html += '</td></tr>';
       }
+      headerRow.appendChild(th);
+    }
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
 
-      // Timezone estimate row
-      if (r.timezone_estimate) {
-        const tz = r.timezone_estimate;
-        html += '<tr><td colspan="10" class="timezone-detail">';
-        html += '<strong>Timezone:</strong> ' + escapeHtml(tz.utc_designation);
-        html += ' (offset: ' + tz.offset_seconds + 's, confidence: ' + tz.confidence + ')';
-        html += ' method: ' + tz.method;
-        if (tz.reasoning && tz.reasoning.length > 0) {
-          html += '<br>' + tz.reasoning.map(escapeHtml).join('<br>');
-        }
-        html += '</td></tr>';
-      }
+    // tbody
+    const tbody = document.createElement('tbody');
+    tbody.id = 'decode-tbody';
+
+    if (currentGroupBy) {
+      renderGroupedRows(results, currentGroupBy, colCount, tbody);
+    } else {
+      results.forEach(function(r, idx) {
+        const pair = renderDataRow(r, idx, colCount);
+        tbody.appendChild(pair.dataRow);
+        tbody.appendChild(pair.accordionRow);
+      });
     }
 
-    html += '</tbody></table>';
-    resultsContainer.insertAdjacentHTML('beforeend', html);
+    table.appendChild(tbody);
+    resultsContainer.appendChild(table);
+    updateFilterCount(results.length, originalResults.length);
   }
+
+  // renderDataRow builds one visible data-row <tr> and its hidden
+  // accordion-row <tr>. Returns { dataRow, accordionRow }.
+  function renderDataRow(r, idx, colCount) {
+    const c = r.classification || {};
+
+    const dataRow = document.createElement('tr');
+    dataRow.className = 'data-row';
+    dataRow.dataset.rowIdx = idx;
+
+    // Toggle cell
+    const toggleTd = document.createElement('td');
+    const toggleSpan = document.createElement('span');
+    toggleSpan.className = 'accordion-toggle';
+    toggleSpan.dataset.accordionToggle = '';
+    toggleSpan.textContent = '\u25b6';
+    toggleTd.appendChild(toggleSpan);
+    dataRow.appendChild(toggleTd);
+
+    // Original — full value in title, ellipsis via CSS
+    const origTd = document.createElement('td');
+    origTd.className = 'col-original';
+    origTd.title = r.original || '';
+    origTd.textContent = r.original || '';
+    dataRow.appendChild(origTd);
+
+    appendTd(dataRow, r.valid ? 'Y' : 'N');
+
+    const clientTd = document.createElement('td');
+    clientTd.innerHTML = clientBadge(c.client_type);
+    dataRow.appendChild(clientTd);
+
+    const verTd = document.createElement('td');
+    verTd.innerHTML = versionBadge(c.server_version);
+    dataRow.appendChild(verTd);
+
+    const confTd = document.createElement('td');
+    confTd.innerHTML = confBadge(c.confidence);
+    dataRow.appendChild(confTd);
+
+    appendTd(dataRow, r.valid ? formatTimestamp(r.timestamp) : '');
+    appendTd(dataRow, r.machine_id || '');
+    appendTd(dataRow, r.pid != null ? r.pid : '');
+    appendTd(dataRow, r.counter != null ? r.counter : '');
+    appendTd(dataRow, r.nonce || '');
+    // Nonce TS and Nonce # — promoted fields, omitempty in JSON
+    appendTd(dataRow, r.nonce_timestamp ? formatTimestamp(r.nonce_timestamp) : '');
+    appendTd(dataRow, r.nonce_counter != null ? r.nonce_counter : '');
+
+    // Accordion row
+    const accordionRow = document.createElement('tr');
+    accordionRow.className = 'accordion-row';
+    const accordionTd = document.createElement('td');
+    accordionTd.className = 'accordion-cell';
+    accordionTd.colSpan = colCount;
+    accordionTd.innerHTML = renderAccordionContent(r);
+    accordionRow.appendChild(accordionTd);
+
+    return { dataRow: dataRow, accordionRow: accordionRow };
+  }
+
+  // appendTd creates a plain text <td> and appends it to row.
+  function appendTd(row, text) {
+    const td = document.createElement('td');
+    td.textContent = String(text);
+    row.appendChild(td);
+  }
+
+  // renderAccordionContent returns the HTML string for the accordion body.
+  // Sections: Nonce Analysis, Timezone Estimate, Classification Reasoning,
+  // Full JSON (always present).
+  function renderAccordionContent(r) {
+    const c = r.classification || {};
+    let html = '';
+
+    if (c.nonce_analysis) {
+      const na = c.nonce_analysis;
+      html += '<div class="accordion-section">';
+      html += '<div class="accordion-section-title">Nonce Analysis</div>';
+      html += '<div>ts: ' + escapeHtml(formatTimestamp(na.nonce_timestamp)) + '</div>';
+      html += '<div>counter: ' + escapeHtml(String(na.nonce_counter != null ? na.nonce_counter : '')) + '</div>';
+      html += '<div>session_age: ' + escapeHtml(na.session_age || '') + '</div>';
+      if (na.commentary && na.commentary.length > 0) {
+        html += '<ul>' + na.commentary.map(function(s) { return '<li>' + escapeHtml(s) + '</li>'; }).join('') + '</ul>';
+      }
+      html += '</div>';
+    }
+
+    if (r.timezone_estimate) {
+      const tz = r.timezone_estimate;
+      html += '<div class="accordion-section">';
+      html += '<div class="accordion-section-title">Timezone Estimate</div>';
+      html += '<div>designation: ' + escapeHtml(tz.utc_designation || '') + '</div>';
+      html += '<div>offset: ' + escapeHtml(String(tz.offset_seconds != null ? tz.offset_seconds : '')) + 's</div>';
+      html += '<div>confidence: ' + escapeHtml(tz.confidence || '') + '</div>';
+      html += '<div>method: ' + escapeHtml(tz.method || '') + '</div>';
+      if (tz.reasoning && tz.reasoning.length > 0) {
+        html += '<ul>' + tz.reasoning.map(function(s) { return '<li>' + escapeHtml(s) + '</li>'; }).join('') + '</ul>';
+      }
+      html += '</div>';
+    }
+
+    if (c.reasoning && c.reasoning.length > 0) {
+      html += '<div class="accordion-section">';
+      html += '<div class="accordion-section-title">Classification Reasoning</div>';
+      html += '<ul>' + c.reasoning.map(function(s) { return '<li>' + escapeHtml(s) + '</li>'; }).join('') + '</ul>';
+      html += '</div>';
+    }
+
+    html += '<div class="accordion-section">';
+    html += '<div class="accordion-section-title">Full JSON</div>';
+    html += '<pre class="json-dump">' + escapeHtml(JSON.stringify(r, null, 2)) + '</pre>';
+    html += '</div>';
+
+    return html;
+  }
+
+  // renderGroupedRows inserts group-header <tr>s between groups of data rows.
+  function renderGroupedRows(results, groupKey, colCount, tbody) {
+    const groupMap = new Map();
+    for (const r of results) {
+      const c = r.classification || {};
+      let key;
+      if (groupKey === 'client_type')         key = c.client_type    || '(unknown)';
+      else if (groupKey === 'server_version') key = c.server_version || '(unknown)';
+      else                                    key = r[groupKey]      || '(unknown)';
+      if (!groupMap.has(key)) groupMap.set(key, []);
+      groupMap.get(key).push(r);
+    }
+
+    const groupLabels = {
+      machine_id: 'Machine', campaign: 'Campaign',
+      client_type: 'Client', server_version: 'Version'
+    };
+    const label = groupLabels[groupKey] || groupKey;
+
+    let groupIdx = 0;
+    for (const [groupVal, rows] of groupMap) {
+      const headerRow = document.createElement('tr');
+      headerRow.className = 'group-header';
+      headerRow.dataset.groupIdx = groupIdx;
+      const headerTd = document.createElement('td');
+      headerTd.colSpan = colCount;
+      headerTd.textContent = label + ': ' + groupVal
+        + ' (' + rows.length + ' row' + (rows.length !== 1 ? 's' : '') + ')';
+      headerRow.appendChild(headerTd);
+      tbody.appendChild(headerRow);
+
+      rows.forEach(function(r, rowIdx) {
+        const pair = renderDataRow(r, groupIdx * 10000 + rowIdx, colCount);
+        pair.dataRow.dataset.groupIdx = groupIdx;
+        pair.accordionRow.dataset.groupIdx = groupIdx;
+        tbody.appendChild(pair.dataRow);
+        tbody.appendChild(pair.accordionRow);
+      });
+
+      groupIdx++;
+    }
+  }
+
+  // ── Sort / filter / group coordination ───────────────────────────────────
+
+  // applyFilterSortGroup: filter originalResults → sort → re-render table.
+  // Called whenever filter text, sort state, or group-by changes.
+  function applyFilterSortGroup() {
+    const q = currentFilter.toLowerCase();
+    let filtered = originalResults;
+    if (q) {
+      filtered = originalResults.filter(function(r) {
+        const c = r.classification || {};
+        const parts = [
+          r.original || '',
+          r.machine_id || '',
+          r.campaign || '',
+          c.client_type || '',
+          c.server_version || '',
+          r.valid ? formatTimestamp(r.timestamp) : '',
+          r.nonce || ''
+        ];
+        return parts.some(function(p) { return p.toLowerCase().indexOf(q) >= 0; });
+      });
+    }
+
+    if (sortState.col) {
+      const dir = sortState.dir === 'asc' ? 1 : -1;
+      filtered = filtered.slice().sort(function(a, b) {
+        const va = getSortValue(a, sortState.col);
+        const vb = getSortValue(b, sortState.col);
+        if (va < vb) return -dir;
+        if (va > vb) return  dir;
+        return 0;
+      });
+    }
+
+    currentResults = filtered;
+    renderDecodeTable(filtered);
+  }
+
+  // getSortValue maps a column sort key to a comparable value for row r.
+  function getSortValue(r, col) {
+    const c = r.classification || {};
+    const confOrder = { high: 3, medium: 2, low: 1 };
+    switch (col) {
+      case 'original':       return (r.original || '').toLowerCase();
+      case 'valid':          return r.valid ? 1 : 0;
+      case 'client_type':    return (c.client_type || '').toLowerCase();
+      case 'server_version': return (c.server_version || '').toLowerCase();
+      case 'confidence':     return confOrder[c.confidence] || 0;
+      case 'timestamp':      return r.timestamp ? new Date(r.timestamp).getTime() : 0;
+      case 'machine_id':     return (r.machine_id || '').toLowerCase();
+      case 'pid':            return r.pid || 0;
+      case 'counter':        return r.counter || 0;
+      case 'nonce':          return (r.nonce || '').toLowerCase();
+      case 'nonce_ts':       return r.nonce_timestamp ? new Date(r.nonce_timestamp).getTime() : 0;
+      case 'nonce_counter':  return r.nonce_counter != null ? r.nonce_counter : -1;
+      default:               return '';
+    }
+  }
+
+  // updateFilterCount updates the #decode-filter-count span.
+  function updateFilterCount(shown, total) {
+    const el = document.getElementById('decode-filter-count');
+    if (!el) return;
+    el.textContent = shown === total
+      ? total + ' rows'
+      : shown + ' of ' + total + ' rows';
+  }
+
+  // ── Event delegation on resultsContainer ─────────────────────────────────
+
+  resultsContainer.addEventListener('click', function(e) {
+    // Accordion toggle
+    const toggle = e.target.closest('[data-accordion-toggle]');
+    if (toggle) {
+      const dataRow = toggle.closest('.data-row');
+      if (dataRow) {
+        const wasExpanded = dataRow.classList.contains('expanded');
+        dataRow.classList.toggle('expanded', !wasExpanded);
+        toggle.textContent = wasExpanded ? '\u25b6' : '\u25bc';
+      }
+      return;
+    }
+
+    // Sort header click
+    const th = e.target.closest('th[data-sort-col]');
+    if (th) {
+      const col = th.dataset.sortCol;
+      if (sortState.col === col) {
+        if (sortState.dir === 'asc')       sortState.dir = 'desc';
+        else if (sortState.dir === 'desc') { sortState.col = null; sortState.dir = null; }
+        else                               sortState.dir = 'asc';
+      } else {
+        sortState.col = col;
+        sortState.dir = 'asc';
+      }
+      applyFilterSortGroup();
+      return;
+    }
+
+    // Group header collapse/expand
+    const groupHeader = e.target.closest('tr.group-header');
+    if (groupHeader) {
+      const gIdx = groupHeader.dataset.groupIdx;
+      const isCollapsed = groupHeader.classList.contains('collapsed');
+      groupHeader.classList.toggle('collapsed', !isCollapsed);
+      const tbody = groupHeader.closest('tbody');
+      if (tbody) {
+        tbody.querySelectorAll('[data-group-idx="' + gIdx + '"]').forEach(function(row) {
+          row.style.display = isCollapsed ? '' : 'none';
+        });
+      }
+      return;
+    }
+  });
+
+  resultsContainer.addEventListener('input', function(e) {
+    if (e.target.id === 'decode-filter') {
+      currentFilter = e.target.value;
+      applyFilterSortGroup();
+    }
+  });
+
+  resultsContainer.addEventListener('change', function(e) {
+    if (e.target.id === 'decode-groupby') {
+      currentGroupBy = e.target.value;
+      applyFilterSortGroup();
+    }
+  });
+
+  // ── Classify results ──────────────────────────────────────────────────────
 
   function renderClassifyResults(results) {
     if (!Array.isArray(results) || results.length === 0) {
@@ -260,7 +760,9 @@
     for (const r of results) {
       const c = r.classification || {};
       html += '<tr>';
-      html += '<td>' + escapeHtml(truncate(r.domain, 40)) + '</td>';
+      // Full value in title attribute; CSS ellipsis handles overflow (Feature 6)
+      html += '<td class="col-original" title="' + escapeHtml(r.domain || '') + '">'
+            + escapeHtml(r.domain || '') + '</td>';
       html += '<td>' + clientBadge(c.client_type) + '</td>';
       html += '<td>' + versionBadge(c.server_version) + '</td>';
       html += '<td>' + confBadge(c.confidence) + '</td>';
@@ -688,11 +1190,6 @@
     const d = new Date(ts);
     if (isNaN(d.getTime())) return escapeHtml(ts);
     return d.toISOString().replace('T', ' ').substring(0, 19);
-  }
-
-  function truncate(s, max) {
-    if (!s) return '';
-    return s.length > max ? s.substring(0, max - 3) + '...' : s;
   }
 
   function escapeHtml(s) {

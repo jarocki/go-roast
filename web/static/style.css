@@ -257,3 +257,184 @@ footer {
 }
 
 footer a { color: var(--accent); }
+
+/* ── Timestamp input group ─────────────────────────────────────── */
+
+.ts-input-group {
+  margin-top: 0.5rem;
+}
+
+.ts-label {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--badge-unknown);
+  margin-bottom: 0.25rem;
+}
+
+.ts-controls {
+  display: flex;
+  gap: 0.375rem;
+  align-items: center;
+}
+
+.ts-controls input[type="datetime-local"] {
+  flex: 1;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-alt);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 0.8125rem;
+}
+
+.ts-controls button {
+  padding: 0.375rem 0.625rem;
+  font-size: 0.8125rem;
+  white-space: nowrap;
+}
+
+.ts-autodetect-notice {
+  display: inline-block;
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--success);
+}
+
+/* ── Table toolbar (filter + groupby) ─────────────────────────── */
+
+.table-toolbar {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.table-filter {
+  flex: 1;
+  min-width: 160px;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-alt);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 0.8125rem;
+}
+
+.filter-count {
+  font-size: 0.75rem;
+  color: var(--badge-unknown);
+  white-space: nowrap;
+}
+
+.groupby-select {
+  padding: 0.375rem 0.5rem;
+  font-size: 0.8125rem;
+}
+
+/* ── Sortable column headers ───────────────────────────────────── */
+
+th[data-sort-col] {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+th[data-sort-col]:hover { background: var(--border); }
+
+th[data-sort-col]::after {
+  content: ' ⇅';
+  opacity: 0.35;
+  font-size: 0.7em;
+}
+
+th[data-sort-col][data-sort-dir="asc"]::after {
+  content: ' ▲';
+  opacity: 1;
+}
+
+th[data-sort-col][data-sort-dir="desc"]::after {
+  content: ' ▼';
+  opacity: 1;
+}
+
+/* ── Accordion rows ────────────────────────────────────────────── */
+
+.accordion-row {
+  display: none;
+}
+
+.data-row.expanded + .accordion-row {
+  display: table-row;
+}
+
+.accordion-cell {
+  padding: 0.5rem 0.75rem !important;
+  background: var(--bg-alt);
+  white-space: normal !important;
+}
+
+.accordion-section {
+  margin-bottom: 0.625rem;
+}
+
+.accordion-section-title {
+  font-weight: bold;
+  font-size: 0.75rem;
+  color: var(--accent);
+  margin-bottom: 0.25rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+pre.json-dump {
+  font-family: inherit;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.5rem;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.accordion-toggle {
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.7em;
+  padding: 0 0.25rem;
+  color: var(--accent);
+}
+
+/* ── Group header rows ─────────────────────────────────────────── */
+
+tr.group-header td {
+  background: var(--bg-alt);
+  font-weight: bold;
+  font-size: 0.8125rem;
+  cursor: pointer;
+  user-select: none;
+  border-top: 2px solid var(--border);
+}
+
+tr.group-header td::before {
+  content: '▼ ';
+  font-size: 0.7em;
+}
+
+tr.group-header.collapsed td::before {
+  content: '▶ ';
+}
+
+/* ── Column: original / domain (ellipsis truncation) ──────────── */
+
+.col-original {
+  max-width: 350px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
