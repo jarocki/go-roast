@@ -1,14 +1,47 @@
 # roast
 
-A Go library, CLI tool, and stdio MCP server for processing Interactsh OAST (Out-of-band Application Security Testing) domains.
+A Go library, CLI tool, self-hosted web server, and stdio MCP server for processing Interactsh OAST (Out-of-band Application Security Testing) domains.
 
 ## Overview
 
 `roast` decodes metadata embedded in Interactsh OAST domain names. These domains encode a 12-byte XID preamble containing timestamp, machine ID, process ID, and counter values that can be used for threat intelligence correlation and campaign tracking.
 
-## Homage
+## Backgfround and OAST Analytics
 
-Built this thanks to John Jarocki's epic LabsCon presentation "["Tracking the cyberspace ghost from OAST to OAST"](https://drive.proton.me/urls/ACAEQN0HB4#wfhmFCMfc4Os)".
+The methods used in roast are based on John Jarocki's LABSCon presentation ["Tracking the cyberspace ghost from OAST to OAST"](https://drive.proton.me/urls/ACAEQN0HB4#wfhmFCMfc4Os).
+
+The paper describes the data that is stored in OAST fully-qualified domain names, which are used as a unique tag for out-of-band testing tools (such as Project Discovery's Nuclei) to validate test success.
+
+### Analytics Derived from the Original Presnetation
+
+| Slide | Claim | Verification |
+|-------|-------|--------------|
+| 17 | XID is a "K-sortable unique identifier" with 12-byte structure | Confirmed: `id.go` defines `type ID [rawLen]byte` where `rawLen = 12` |
+| 17 | Preamble encoded in base32hex, nonce in z-base-32 | Confirmed: preamble uses `0123456789abcdefghijklmnopqrstuv`, nonce uses `ybndrfg8ejkmcpqxot1uwisza345h769` |
+| 19 | Byte layout: TS(4) + MID(3) + PID(2) + Counter(3) | Confirmed: matches `id.go` field offsets exactly |
+| 21 | MID uses SHA-256 of platform machine ID | Confirmed for xid v1.5.0+ (current versions) |
+| 21 | Platform sources: Linux `/etc/machine-id`, macOS `sysctl kern.uuid`, Windows Registry `MachineGuid`, FreeBSD `sysctl kern.hostuuid` | Confirmed: matches `hostid_*.go` platform files |
+| 21 | Fallback to hostname or random bytes | Confirmed: `readMachineID()` fallback chain |
+| 22 | z-base-32 `y` = 0, producing `yyy` runs in v1.0.1 nonces | Confirmed: z-base-32 alphabet starts with `y` mapping to 0 |
+| 22 | v1.0.2 (2022-03-20) fixed the nonce to use random bytes | Confirmed: commit `0166128` switched to `crypto/rand` |
+| 22 | Web client uses z-base-32 for both preamble and nonce | Confirmed: web client JavaScript uses z-base-32 throughout |
+| 37 | "The timestamp is relative to the timezone setting of the interactsh client" | Confirmed: XID encodes `time.Now().Unix()` which uses the client's local wall clock, not UTC |
+
+### Missing from Presentation
+
+The following details are absent from the presentation but are important for
+forensic analysis:
+
+| Topic | What's Missing | Why It Matters |
+|-------|---------------|----------------|
+| **Hash evolution** | Presentation shows SHA-256 (slide 21) but does not mention that older versions used MD5, or when the transition occurred | An analyst comparing MIDs across pre/post April 2023 domains would see different MIDs for the same machine and might incorrectly conclude they're different operators |
+| **Exact xid version mapping** | No mapping of interactsh versions to xid versions | Without this, analysts can't determine which hash algorithm produced a given MID |
+| **`XID_MACHINE_ID` env var** | Not mentioned (added May 2025, after the presentation) | Operators can now spoof their MID by setting this environment variable, undermining machine correlation |
+| **Linux fallback path** | `/sys/class/dmi/id/product_uuid` as secondary source on Linux | In containerized environments where `/etc/machine-id` may be absent, the DMI UUID is used instead |
+| **Automated timezone estimation at scale** | Presentation demonstrates the differential technique (GA cookie vs XID timestamp, slide 36) and notes timestamps are local (slide 37), but doesn't formalize it as a systematic pipeline for bulk timezone estimation across campaigns | Roast's `EstimateTimezone()` and `ConsensusTimezone()` automate this across many domains with confidence scoring |
+| **Counter initialization** | Counter is seeded from `crypto/rand`, not started at 0 | Important for counter gap analysis — the first domain from a process won't have counter=0 (unlike v1.0.1 nonces) |
+| **PID truncation** | PID is stored as `os.Getpid() % 65536` (2 bytes) | On Linux with high PIDs (>65535), different processes can produce the same PID field |
+
 
 ## Installation
 
