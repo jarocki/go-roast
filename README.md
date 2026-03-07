@@ -52,7 +52,10 @@ go install codeberg.org/hrbrmstr/go-roast/cmd/roast@latest
 Or build from source:
 
 ```bash
-git clone https://codeberg.org/hrbrmstr/go-roast
+# To install from Bob Rudis' original repo:
+# git clone https://codeberg.org/hrbrmstr/go-roast
+# To install from this fork:
+git clone https://github.com/jarocki/go-roast
 cd go-roast
 go build -o roast ./cmd/roast
 ```
