@@ -1,0 +1,31 @@
+name: Validate Go test suite
+
+on:
+  push:
+    branches:
+      - test/module-path-validation
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.5'
+          cache: true
+
+      - name: Verify module files
+        run: go mod verify
+
+      - name: Run complete test suite
+        run: go test -count=1 ./...
+
+      - name: Build all packages
+        run: go build ./...
