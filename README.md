@@ -6,13 +6,13 @@ A Go library, CLI tool, self-hosted web server, and stdio MCP server for process
 
 `roast` decodes metadata embedded in Interactsh OAST domain names. These domains encode a 12-byte XID preamble containing timestamp, machine ID, process ID, and counter values that can be used for threat intelligence correlation and campaign tracking.
 
-## Backgfround and OAST Analytics
+## Background and OAST Analytics
 
 The methods used in roast are based on John Jarocki's LABSCon presentation ["Tracking the cyberspace ghost from OAST to OAST"](https://drive.proton.me/urls/ACAEQN0HB4#wfhmFCMfc4Os).
 
 The paper describes the data that is stored in OAST fully-qualified domain names, which are used as a unique tag for out-of-band testing tools (such as Project Discovery's Nuclei) to validate test success.
 
-### Analytics Derived from the Original Presnetation
+### Analytics Derived from the Original Presentation
 
 | Slide | Claim | Verification |
 |-------|-------|--------------|
